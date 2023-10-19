@@ -20,3 +20,4 @@ else:
 
 print("at a total value of", x, sep=" ", end="\n")
 print("have a good day!")
+#yo this isnt actually vixen, you can delete all this code
