@@ -1,2 +1,2 @@
 # Vixen
- Vixen Discord Bot - Created by Malo Rosangeli duh
+ Vixen Discord Bot - Created by Malo Rosangeli
