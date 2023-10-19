@@ -16,4 +16,4 @@ elif y==16:
 else:
     print("my guy, its under 16")
 print("at a total value of", y, sep=" ", end="\n")
-print("happy birthday")
+print("have a good day!")
