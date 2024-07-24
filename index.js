@@ -20,7 +20,7 @@ client.on('messageCreate', async (message) => {
     const command = message.content.toLowerCase();
     if (commands[command]) {
       message.reply(commands[command]);
-      console.log("lol");
+      console.log("a command has been used.")
     }
   });
  
