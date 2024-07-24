@@ -12,15 +12,10 @@ client.on('ready', async () => {
 });
  
 client.on('messageCreate', async (message) => {
-    const commands = {
-      "test": "Test successful!",
-      "what do you think about louis?": "he is a buzzlightyear in the aisle"
-    };
-  
-    const command = message.content.toLowerCase();
-    if (commands[command]) {
-      message.reply(commands[command]);
+    if (message.content.toLowerCase() === "test") {
+        console.log("slur has been said.")
+        message.reply("wsg my nigga");
     }
-  });
+});
  
 client.login(token);
