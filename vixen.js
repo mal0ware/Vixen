@@ -12,9 +12,9 @@ client.on('ready', async () => {
 });
  
 client.on('messageCreate', async (message) => {
-    if (message.content.toLowerCase() === "vixen.") {
+    if (message.content.toLowerCase() === "test") {
         console.log("slur has been said.")
-        message.reply("louis, its terminal");
+        message.reply("nigga stfu");
     }
 });
  
