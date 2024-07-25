@@ -8,6 +8,7 @@ const client = new Discord.Client({
  
 const token = ("REDACTED-DISCORD-TOKEN")
 const prefix = '!'; //SET PREFIX HERE
+
 client.commands = new Discord.Collection();
 
 const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
