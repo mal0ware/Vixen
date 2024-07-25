@@ -25,8 +25,7 @@ client.on('ready', async () => {
 client.on('messageCreate', async message => {
   //if (!message.content.startsWith(prefix)) return; // You can set a prefix here.
 // add slice(prefix.length). between message content. and trim().split
-//const args = message.content.trim().split('/ +/g');
-  const args = message.content.trim().split(' ').slice(1);
+  const args = message.content.trim().split('/ +/g');
   const commandName = args.shift().toLowerCase();
 
   const command = client.commands.get(commandName);
