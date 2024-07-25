@@ -2,7 +2,7 @@
   "name": "vixen",
   "version": "1.0.0",
   "description": "Virtual Intelligence Xpressing Empathic Nurturing",
-  "main": "index.js",
+  "main": "vixen.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
