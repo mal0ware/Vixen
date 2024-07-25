@@ -1,4 +1,5 @@
 const Discord = require("discord.js");
+const fs = require('fs');
  //V.I.X.E.N.
 const client = new Discord.Client({
     intents: ["GUILDS", "GUILD_MESSAGES", "GUILD_MEMBERS", "MESSAGE_CONTENT"],
@@ -8,7 +9,7 @@ const client = new Discord.Client({
 const token = ("OTMzNDk1MTI5NTM1MzA3ODE2.GLctK6.OPOS1MG4gtnVCIoZN1HV-l7sbiNdyW9PN4SDOU")
 client.commands = new Discord.Collection();
 
-const commandFiles = readdirSync('./commands').filter(file => file.endsWith('.js'));
+const commandFiles = fs.readdirSync('./commands').filter(file => file.endsWith('.js'));
 
 for (const file of commandFiles) {
   const command = require(`./commands/${file}`);
