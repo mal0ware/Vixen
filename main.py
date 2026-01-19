@@ -9,8 +9,6 @@ Variable Interface for Xenic Extraplanar Nomenclature
 Very Impressive Xenomorphous Extraterrestrial Neologism
 
 
-
-
 This version uses the modern discord.py 2.x pattern:
 
 - A custom Bot subclass (so we can override setup_hook).
