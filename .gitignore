@@ -1,0 +1,9 @@
+.env
+temp/
+data.json
+prefixes.json
+venv/
+.DS_Store
+.vscode/
+__pycache__/
+discordbotinfo.txt
