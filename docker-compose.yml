@@ -1,6 +1,11 @@
 # Local-dev infra: Postgres + Redis. Bring up with `docker compose up -d`.
 # Production deployments use the same service definitions but with managed
 # Postgres/Redis (see README "Deploying" section).
+#
+# Host port choices (5433 / 6380) intentionally avoid Linger's defaults
+# (5432 / 6379) so both projects can run simultaneously on this machine.
+# Inside the container, Postgres still listens on 5432 and Redis on 6379 —
+# only the host-exposed mapping is non-default.
 
 services:
   postgres:
@@ -11,7 +16,7 @@ services:
       POSTGRES_PASSWORD: vixen
       POSTGRES_DB: vixen
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - vixen_pg_data:/var/lib/postgresql/data
     healthcheck:
@@ -24,7 +29,7 @@ services:
     image: redis:7-alpine
     container_name: vixen-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - vixen_redis_data:/data
     command: ["redis-server", "--appendonly", "yes"]
