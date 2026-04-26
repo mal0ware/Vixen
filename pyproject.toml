@@ -1,0 +1,87 @@
+[project]
+name = "vixen"
+version = "0.2.0"
+description = "Personal Discord assistant + economy / mini-game bot"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Marius Castillo", email = "mal0ss.network@gmail.com" }]
+license = { text = "UNLICENSED" }
+
+# Runtime dependencies. Pinned with lower bounds; install resolves the latest
+# compatible. Run `pip install -e ".[dev]"` for the full dev environment.
+dependencies = [
+    # Discord
+    "discord.py>=2.4",
+
+    # Async HTTP (replaces blocking `requests` in fin_cog / utility / view_cog)
+    "aiohttp>=3.9",
+
+    # Config / typed settings
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    "python-dotenv>=1.0",
+
+    # Database
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+
+    # Cache / rate limit / leaderboards
+    "redis>=5.0",
+
+    # Logging
+    "structlog>=24.1",
+
+    # Finance / data (used by fin_cog)
+    "yfinance>=0.2.40",
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "dpytest>=0.7",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "ipython>=8.20",
+]
+
+[project.scripts]
+vixen = "vixen.bot:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/vixen"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle / pyflakes
+    "I",             # import order
+    "N",             # PEP-8 naming
+    "UP",            # pyupgrade
+    "B",             # bugbear
+    "ASYNC",         # async-specific lints
+    "RUF",           # ruff's own
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict_optional = true
+warn_unused_ignores = true
+warn_return_any = true
+ignore_missing_imports = true     # discord.py + yfinance lack good stubs
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
