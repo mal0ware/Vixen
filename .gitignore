@@ -1,9 +1,38 @@
+# --- Secrets & local config ---
 .env
+*.env.local
+discordbotinfo*.txt
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# --- Node (legacy / archive) ---
+node_modules/
+package-lock.json
+
+# --- Runtime data (will move to Postgres; for now treat as local) ---
 temp/
 data.json
 prefixes.json
-venv/
-.DS_Store
+data/*.json
+!data/.gitkeep
+
+# --- Editor / OS ---
 .vscode/
-__pycache__/
-discordbotinfo.txt
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Logs / pids ---
+*.log
+*.pid
