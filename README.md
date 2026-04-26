@@ -92,6 +92,8 @@ docker compose up -d
 
 Verifies with `docker compose ps` — both should be `healthy`.
 
+> **Ports:** Postgres is exposed on host port **5433** (not the default 5432), Redis on **6380** (not the default 6379). This is intentional — Linger uses the defaults, and Vixen needs to coexist on the same machine. Inside the containers the standard ports are used; only the host-side mapping is offset.
+
 ### 3. Set up the Python environment
 
 From the repo root:
