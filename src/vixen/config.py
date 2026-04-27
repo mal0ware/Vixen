@@ -24,16 +24,20 @@ class Settings(BaseSettings):
     )
 
     # --- Discord ---
-    discord_token: str = Field(..., description="Bot token from Discord Developer Portal")
-    guild_id: int = Field(..., description="Primary dev guild for fast slash-command sync")
+    # Defaults are deliberate placeholders so utility commands (alembic, ipython,
+    # tests) can construct Settings without a real token. The actual bot startup
+    # path validates these in `bot.main()` and refuses to launch with placeholders.
+    discord_token: str = Field("", description="Bot token from Discord Developer Portal")
+    guild_id: int = Field(0, description="Primary dev guild for fast slash-command sync")
 
     # --- Database / cache ---
+    # Non-default host ports (5433 / 6380) — see docker-compose.yml for why.
     database_url: str = Field(
-        "postgresql+asyncpg://vixen:vixen@localhost:5432/vixen",
+        "postgresql+asyncpg://vixen:vixen@localhost:5433/vixen",
         description="Async SQLAlchemy URL for Postgres",
     )
     redis_url: str = Field(
-        "redis://localhost:6379/0",
+        "redis://localhost:6380/0",
         description="Redis URL (db 0 by default)",
     )
 

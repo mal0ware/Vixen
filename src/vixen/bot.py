@@ -272,6 +272,19 @@ async def main() -> None:
     setup_logging()
     settings = get_settings()
 
+    # Fast-fail when required secrets are still placeholders. Settings allows
+    # empty defaults so utility commands (alembic, tests) work, but the bot
+    # itself must have a real token + dev guild.
+    if not settings.discord_token:
+        raise RuntimeError(
+            "DISCORD_TOKEN is empty. Set it in .env before starting the bot."
+        )
+    if settings.env == "dev" and not settings.guild_id:
+        raise RuntimeError(
+            "GUILD_ID is empty (or 0). Set it in .env when running with ENV=dev "
+            "so slash-command sync can target your dev guild."
+        )
+
     # Bring up infra BEFORE the bot logs in — if Postgres or Redis is
     # unreachable we want to fail loudly here, not after Discord auth.
     init_db()
