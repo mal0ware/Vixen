@@ -117,9 +117,9 @@ class VixenBot(commands.Bot):
 
         # Legacy attributes that existing cogs reference. These get
         # populated by `_attach_legacy_state` in `_build_bot()`.
+        # Each line dies as the corresponding cog migrates to Postgres.
         self.legacy_data: dict = {}
         self.legacy_stats2: dict = {}
-        self.legacy_rpg: dict = {}
 
     async def setup_hook(self) -> None:
         """One-shot startup hook. Loads cogs, syncs slash tree."""
@@ -179,12 +179,16 @@ class VixenBot(commands.Bot):
 def _build_bot() -> VixenBot:
     """Construct the bot with legacy state attached.
 
-    The `bot.data`, `bot.stats2`, `bot.rpg` aliases below are the names
-    existing cogs use today. We keep them stable so unmigrated cogs work.
+    The `bot.data` and `bot.stats2` aliases below are the names existing
+    cogs use today. We keep them stable so unmigrated cogs work. Each gets
+    deleted as its consumer cog migrates to Postgres.
+
+    `bot.rpg` was removed when rpg_cog.py → cogs/economy.py landed
+    (Postgres-backed). data/rpg.json is retained on disk as a backup until
+    the import is verified, then can be deleted.
     """
     legacy_data = _load_json(PROJECT_ROOT / "data.json")
     legacy_stats2 = _load_json(PROJECT_ROOT / "data" / "stats2.json")
-    legacy_rpg = _load_json(PROJECT_ROOT / "data" / "rpg.json")
     legacy_prefixes = _load_json(PROJECT_ROOT / "prefixes.json")
 
     intents = discord.Intents.default()
@@ -197,12 +201,11 @@ def _build_bot() -> VixenBot:
         prefix_callable=_make_prefix_callable(legacy_prefixes),
     )
 
-    # Attribute aliases used by existing cogs (admin, rpg, snipe, etc.).
+    # Attribute aliases used by existing cogs (admin, snipe, etc.).
     # As each cog migrates to the DB layer, the corresponding line below
     # gets deleted.
     bot.data = legacy_data            # type: ignore[attr-defined]
     bot.stats2 = legacy_stats2        # type: ignore[attr-defined]
-    bot.rpg = legacy_rpg              # type: ignore[attr-defined]
 
     _register_event_handlers(bot)
     return bot
