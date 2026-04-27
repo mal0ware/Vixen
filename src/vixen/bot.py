@@ -1,0 +1,306 @@
+"""Vixen entrypoint.
+
+Lifecycle:
+
+    asyncio.run(main())
+        ├─ setup_logging()          # structlog: JSON in prod, colored in dev
+        ├─ init_db()                # async SQLAlchemy engine + sessionmaker
+        ├─ init_redis()             # async Redis connection pool
+        ├─ build VixenBot
+        ├─ bot.start(token)         # connects to Discord
+        │     ├─ setup_hook()       # discord.py one-shot startup
+        │     │     ├─ load cogs from ./cogs/   (legacy, transitional)
+        │     │     └─ tree.sync()  # slash commands: per-guild in dev, global in prod
+        │     ├─ on_ready (just logs)
+        │     └─ event loop ...
+        └─ on shutdown:
+              ├─ dispose_redis()
+              └─ dispose_db()
+
+Run from the project root:
+
+    python -m vixen          # via the console-script entry in pyproject.toml
+    # or
+    python src/vixen/bot.py  # equivalent
+
+Why the legacy bits are still here:
+
+The old `main.py` loaded prefixes.json, data.json, data/stats2.json, and
+data/rpg.json, and attached them to the bot so cogs could read/write them.
+Until each cog is migrated to use Postgres + Redis, the bot still needs to
+provide those attributes or every legacy cog crashes on import. They get
+removed one-by-one as each cog is rewritten.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+from pathlib import Path
+
+import discord
+from discord.ext import commands
+
+from .cache import dispose_redis, init_redis
+from .config import get_settings
+from .db import dispose_db, init_db
+from .logging import get_logger, setup_logging
+
+# Project root, derived from this file's location. Lets the bot run from
+# any CWD without breaking JSON-relative paths.
+#   src/vixen/bot.py  ->  parents[2] is the repo root.
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+COGS_DIR = PROJECT_ROOT / "cogs"
+
+log = get_logger(__name__)
+
+
+# --------------------------------------------------------------------------- #
+# Legacy JSON state — loaded once at startup, attached to the bot instance,
+# read/written by unmigrated cogs. Disappears as cogs migrate to Postgres.
+# --------------------------------------------------------------------------- #
+
+
+def _load_json(path: Path) -> dict:
+    """Load a JSON file, returning {} if it doesn't exist.
+
+    Used only for transitional state. Real persistence will live in Postgres.
+    """
+    if not path.exists():
+        log.warning("legacy_json_missing", path=str(path))
+        return {}
+    with path.open(encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _make_prefix_callable(prefixes: dict[str, str], default: str = "!"):
+    """Return a discord.py-compatible prefix callable.
+
+    The callable receives (bot, message) on every incoming message and must
+    return the prefix string for that context. We look up by guild_id (or
+    author_id for DMs) and fall back to `default`.
+    """
+
+    def prefix(bot: commands.Bot, message: discord.Message) -> str:
+        gid = message.guild.id if message.guild else message.author.id
+        return prefixes.get(str(gid), default)
+
+    return prefix
+
+
+# --------------------------------------------------------------------------- #
+# Custom Bot subclass
+# --------------------------------------------------------------------------- #
+
+
+class VixenBot(commands.Bot):
+    """Custom Bot.
+
+    Two reasons to subclass instead of using `commands.Bot` directly:
+
+    1. We can override `setup_hook`, which is the discord.py-blessed place
+       to load extensions and sync the application command tree exactly
+       once at startup. (`on_ready` fires on every reconnect, so loading
+       there causes ExtensionAlreadyLoaded errors on flaky networks.)
+
+    2. We can attach shared state (legacy JSON for unmigrated cogs) without
+       resorting to module-level globals.
+    """
+
+    def __init__(self, *, intents: discord.Intents, prefix_callable):
+        super().__init__(
+            command_prefix=prefix_callable,
+            intents=intents,
+            help_command=None,
+        )
+
+        # Legacy attributes that existing cogs reference. These get
+        # populated by `_attach_legacy_state` in `_build_bot()`.
+        self.legacy_data: dict = {}
+        self.legacy_stats2: dict = {}
+        self.legacy_rpg: dict = {}
+
+    async def setup_hook(self) -> None:
+        """One-shot startup hook. Loads cogs, syncs slash tree."""
+        await self._load_cogs()
+        await self._sync_slash_commands()
+
+    async def _load_cogs(self) -> None:
+        """Discover and load every .py file under ./cogs/ as a cog."""
+        if not COGS_DIR.is_dir():
+            log.error("cogs_dir_missing", path=str(COGS_DIR))
+            return
+
+        for entry in sorted(os.listdir(COGS_DIR)):
+            if not entry.endswith(".py") or entry.startswith("_"):
+                continue
+            ext = f"cogs.{entry[:-3]}"
+            try:
+                await self.load_extension(ext)
+                log.info("cog_loaded", extension=ext)
+            except Exception:
+                # Don't crash startup on one bad cog — log and continue.
+                # In prod we'd page on this; for personal use, log is fine.
+                log.exception("cog_load_failed", extension=ext)
+
+    async def _sync_slash_commands(self) -> None:
+        """Sync the application command tree.
+
+        Two modes:
+        - dev  : copy global commands to a single guild and sync there.
+                 Effect is instant — the dev guild sees command changes
+                 the moment the bot boots.
+        - prod : sync globally. Discord rate-limits global syncs heavily
+                 (hours of propagation) — only do this when shipping a
+                 stable command surface.
+        """
+        settings = get_settings()
+        if settings.env == "dev":
+            guild_obj = discord.Object(id=settings.guild_id)
+            self.tree.copy_global_to(guild=guild_obj)
+            synced = await self.tree.sync(guild=guild_obj)
+            log.info(
+                "slash_synced",
+                scope="guild",
+                guild_id=settings.guild_id,
+                count=len(synced),
+            )
+        else:
+            synced = await self.tree.sync()
+            log.info("slash_synced", scope="global", count=len(synced))
+
+
+# --------------------------------------------------------------------------- #
+# Bot construction
+# --------------------------------------------------------------------------- #
+
+
+def _build_bot() -> VixenBot:
+    """Construct the bot with legacy state attached.
+
+    The `bot.data`, `bot.stats2`, `bot.rpg` aliases below are the names
+    existing cogs use today. We keep them stable so unmigrated cogs work.
+    """
+    legacy_data = _load_json(PROJECT_ROOT / "data.json")
+    legacy_stats2 = _load_json(PROJECT_ROOT / "data" / "stats2.json")
+    legacy_rpg = _load_json(PROJECT_ROOT / "data" / "rpg.json")
+    legacy_prefixes = _load_json(PROJECT_ROOT / "prefixes.json")
+
+    intents = discord.Intents.default()
+    # Required to read message content for prefix-style commands. Must also
+    # be enabled in the Developer Portal under Bot -> Privileged Intents.
+    intents.message_content = True
+
+    bot = VixenBot(
+        intents=intents,
+        prefix_callable=_make_prefix_callable(legacy_prefixes),
+    )
+
+    # Attribute aliases used by existing cogs (admin, rpg, snipe, etc.).
+    # As each cog migrates to the DB layer, the corresponding line below
+    # gets deleted.
+    bot.data = legacy_data            # type: ignore[attr-defined]
+    bot.stats2 = legacy_stats2        # type: ignore[attr-defined]
+    bot.rpg = legacy_rpg              # type: ignore[attr-defined]
+
+    _register_event_handlers(bot)
+    return bot
+
+
+def _register_event_handlers(bot: VixenBot) -> None:
+    """Attach top-level event handlers.
+
+    Defined as nested functions on the bot rather than methods on VixenBot
+    because discord.py's `@bot.event` decorator pattern is more idiomatic
+    here than overriding `Bot.on_*` methods.
+    """
+
+    @bot.event
+    async def on_ready():
+        # Fires every time the websocket reconnects. Avoid doing real work
+        # here — startup logic belongs in setup_hook.
+        log.info("bot_ready", user=str(bot.user), user_id=getattr(bot.user, "id", None))
+
+    @bot.event
+    async def on_message(message: discord.Message):
+        if message.author.bot:
+            return
+        # Required when using a *dynamic* prefix callable: otherwise
+        # discord.py won't actually invoke command handlers.
+        await bot.process_commands(message)
+
+    @bot.event
+    async def on_command_error(
+        ctx: commands.Context, error: commands.CommandError
+    ) -> None:
+        # User-facing, "expected" errors get a friendly reply.
+        if isinstance(error, commands.MissingPermissions):
+            missing = ", ".join(
+                p.replace("_", " ").title() for p in error.missing_permissions
+            )
+            await ctx.send(f"You don't have permission. Required: **{missing}**")
+            return
+        if isinstance(error, commands.MissingRequiredArgument):
+            await ctx.send(f"Missing argument: `{error.param.name}`.")
+            return
+        if isinstance(error, commands.CommandOnCooldown):
+            await ctx.send(f"Slow down — try again in {error.retry_after:.1f}s.")
+            return
+        if isinstance(error, commands.CommandNotFound):
+            return  # silently ignore typos like `!fnord`
+
+        # Anything else: log with full traceback, tell the user something
+        # broke. We do NOT re-raise — that would surface the traceback to
+        # the websocket layer and can destabilize the event loop.
+        log.exception(
+            "command_error",
+            command=getattr(ctx.command, "qualified_name", None),
+            user_id=ctx.author.id,
+            guild_id=ctx.guild.id if ctx.guild else None,
+            error=repr(error),
+        )
+        await ctx.send(f"Something went wrong: `{type(error).__name__}`.")
+
+
+# --------------------------------------------------------------------------- #
+# Entry point
+# --------------------------------------------------------------------------- #
+
+
+async def main() -> None:
+    setup_logging()
+    settings = get_settings()
+
+    # Bring up infra BEFORE the bot logs in — if Postgres or Redis is
+    # unreachable we want to fail loudly here, not after Discord auth.
+    init_db()
+    init_redis()
+    log.info("infra_ready", env=settings.env)
+
+    bot = _build_bot()
+
+    try:
+        async with bot:
+            await bot.start(settings.discord_token)
+    finally:
+        # Always run on shutdown, including KeyboardInterrupt and crashes.
+        await dispose_redis()
+        await dispose_db()
+        log.info("infra_disposed")
+
+
+def run() -> None:
+    """Console-script entry point. Wired to `vixen` in pyproject.toml.
+
+    Equivalent to `python -m vixen` or `python src/vixen/bot.py`.
+    """
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Clean Ctrl-C exit — main()'s `finally` already disposed infra.
+        log.info("bot_stopped")
+
+
+if __name__ == "__main__":
+    run()
