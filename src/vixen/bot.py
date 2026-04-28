@@ -148,9 +148,13 @@ class VixenBot(commands.Bot):
         """Sync the application command tree.
 
         Two modes:
-        - dev  : copy global commands to a single guild and sync there.
-                 Effect is instant — the dev guild sees command changes
-                 the moment the bot boots.
+        - dev  : copy global commands to the dev guild, then explicitly
+                 clear the global tree on Discord. Effect: the dev guild
+                 sees commands instantly, and any leftover global
+                 registrations from previous runs (or the buggy old
+                 main.py) get scrubbed. Idempotent — once Discord's
+                 global registration is empty, subsequent runs no-op the
+                 clear and the sync is fast.
         - prod : sync globally. Discord rate-limits global syncs heavily
                  (hours of propagation) — only do this when shipping a
                  stable command surface.
@@ -158,7 +162,15 @@ class VixenBot(commands.Bot):
         settings = get_settings()
         if settings.env == "dev":
             guild_obj = discord.Object(id=settings.guild_id)
+            # 1. Mirror the in-memory global tree into the dev guild.
             self.tree.copy_global_to(guild=guild_obj)
+            # 2. Clear the in-memory global tree so the next sync()
+            #    pushes "no global commands" to Discord.
+            self.tree.clear_commands(guild=None)
+            # 3. Sync (now-empty) global tree -> Discord wipes any leftover
+            #    global registrations from previous runs.
+            await self.tree.sync()
+            # 4. Sync the dev guild so the user sees the actual commands.
             synced = await self.tree.sync(guild=guild_obj)
             log.info(
                 "slash_synced",
