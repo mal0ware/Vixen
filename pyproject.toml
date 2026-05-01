@@ -37,6 +37,9 @@ dependencies = [
     "pandas>=2.2",
     "numpy>=1.26",
     "matplotlib>=3.8",
+    # Candlestick + financial chart helpers on top of matplotlib. Used by
+    # services/charts.py for proper OHLC/volume rendering.
+    "mplfinance>=0.12",
 ]
 
 [project.optional-dependencies]
