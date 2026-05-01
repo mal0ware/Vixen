@@ -55,27 +55,47 @@ vixen/
 │   ├── logging.py             # structlog setup
 │   ├── db.py                  # async SQLAlchemy session factory
 │   ├── cache.py               # Redis async client
-│   ├── models/                # ORM models
+│   ├── models/                # ORM models — one file per table
 │   │   ├── base.py            # Base + TimestampMixin
 │   │   ├── user.py            # cash, bank, follows user across guilds
 │   │   ├── guild.py           # per-server settings (prefix, etc.)
 │   │   ├── inventory.py       # user-owned items (qty per item_key)
+│   │   ├── lottery.py         # entries staked into the current lottery draw
+│   │   ├── reminder.py        # scheduled reminders + fired flag
 │   │   └── transaction.py     # append-only audit log of cash movements
 │   └── services/              # business logic — cogs stay thin
 │       ├── economy.py         # change_cash, get_or_create_user, typed errors
-│       ├── shop.py            # buy/sell/list inventory; atomic at cog boundary
-│       └── items.py           # static item catalog (name, price, sell_price)
+│       ├── shop.py            # buy/sell/list/has_item primitives
+│       ├── items.py           # static item catalog
+│       ├── effects.py         # /use effect-handler registry
+│       ├── use.py             # /use orchestration (consume + dispatch effect)
+│       ├── cooldown.py        # Redis escalating cooldown service
+│       ├── leaderboard.py     # Redis ZSET wealth leaderboard
+│       ├── fishing.py         # /fish weighted catch table
+│       ├── lottery.py         # /lottery enter/pool/draw mechanics
+│       ├── robbery.py         # /rob outcomes (blocked/failed/succeeded)
+│       ├── reminders.py       # /remind create/list/cancel + due polling
+│       └── prefix.py          # per-guild prefix with Redis cache
 ├── tests/
-│   ├── conftest.py            # per-test Postgres DB fixture
-│   └── services/              # service-layer tests (real DB, no mocks)
+│   ├── conftest.py            # per-test Postgres DB + Redis db=1 fixtures
+│   └── services/              # service-layer tests (real DB + Redis, no mocks)
 │
 ├── cogs/                      # ACTIVE LOAD PATH — both new- and old-shape cogs live here
-│   ├── economy.py             # NEW SHAPE: thin cog, calls services.economy
-│   ├── shop.py                # NEW SHAPE: thin cog, calls services.shop
-│   └── (others)               # OLD SHAPE: fat cogs reading data/*.json directly
+│   ├── economy.py             # NEW SHAPE — /profile, /work, /coinflip
+│   ├── shop.py                # NEW SHAPE — /shop, /buy, /sell, /inventory
+│   ├── use.py                 # NEW SHAPE — /use consumables
+│   ├── leaderboard.py         # NEW SHAPE — /leaderboard top, /leaderboard rank
+│   ├── games.py               # NEW SHAPE — /dice, /slots
+│   ├── fishing.py             # NEW SHAPE — /fish
+│   ├── lottery.py             # NEW SHAPE — /lottery enter/pool/draw
+│   ├── robbery.py             # NEW SHAPE — /rob
+│   ├── reminders.py           # NEW SHAPE — /remind set/list/cancel + polling
+│   ├── prefix.py              # NEW SHAPE — /setprefix admin command
+│   └── (others)               # OLD SHAPE — admin, attendance, avatar, doge,
+│                              #  fin, help, modal, moderation, snipe, utility, view
 ├── data/                      # LEGACY — JSON state files; deleted as each cog migrates
 ├── main.py                    # LEGACY — old bot entrypoint, superseded by src/vixen/bot.py
-├── prefixes.json              # LEGACY — guild prefix lookup, will move to Guild + Redis
+├── prefixes.json              # LEGACY — no longer read; replaced by Guild + Redis prefix service
 ├── data.json                  # LEGACY — read by remaining old-shape cogs
 │
 └── vixenjavascriptarchive/    # archived discord.js v13 bot from 2022
@@ -354,32 +374,43 @@ In your dev guild, exercise each command. Slash commands sync to the dev guild o
 - [x] Cleanup: remove JS-era leftovers, fix broken refs, rotate leaked token
 - [x] Project metadata: `pyproject.toml`, `docker-compose.yml`, `.env.example`
 - [x] Source skeleton: `config.py`, `logging.py`, `db.py`, `cache.py`
-- [x] Schema: `User`, `Guild`, `InventoryItem`, `Transaction`
-- [x] Alembic wired (env.py, ini, template)
-- [x] `src/vixen/bot.py` — entrypoint with init_db / init_redis hooks, structured logging, fault-tolerant cog loader
+- [x] Schema: `User`, `Guild`, `InventoryItem`, `Transaction`, `LotteryEntry`, `Reminder`
+- [x] Alembic wired (env.py, ini, template) + three migrations applied
+- [x] `src/vixen/bot.py` — entrypoint with init_db / init_redis hooks, structured logging, fault-tolerant cog loader, async per-guild prefix callable
 - [x] First Alembic migration: the four base tables
 - [x] Migrate `rpg_cog` → `cogs/economy.py` (Postgres-backed `/profile`, `/work`, `/coinflip`)
-- [x] Service-layer test infrastructure (per-test Postgres DB, truncate-between-tests)
-- [x] Shop / inventory commands (`/shop`, `/buy`, `/sell`, `/inventory`)
-- [x] Redis-backed cooldowns (`services/cooldown.py`; wired into economy + shop)
+- [x] Service-layer test infrastructure (per-test Postgres DB + Redis db=1, truncate-between-tests, soft-fail when Redis isn't initialized)
+- [x] Shop / inventory commands (`/shop`, `/buy`, `/sell`, `/inventory`, `has_item` primitive)
+- [x] Redis-backed escalating cooldowns (`services/cooldown.py`; 1s/3s/5s curve, 30s idle reset; wired into every mutating command)
+- [x] `/use` consumables loop + effect-handler registry (bread, coffee)
+- [x] Redis-backed wealth leaderboard (sorted set; auto-syncs from `change_cash`; `/leaderboard top` + `/leaderboard rank`)
+- [x] Replace `print` with `structlog` everywhere active
+- [x] Mini-games: `/dice` (2d6 with 10x jackpots) + `/slots` (3-reel, 25x jackpot)
+- [x] Fishing cog (`/fish`, weighted catch table, durable rod)
+- [x] Lottery cog (`/lottery enter`, `/lottery pool`, `/lottery draw` admin) with new `lottery_entries` table
+- [x] Robbery cog (`/rob` with 50/50 odds, padlock defense, 10% failure penalty)
+- [x] Reminders cog (`/remind set/list/cancel`) with new `reminders` table and 30-second background poller
+- [x] Migrate prefix lookup → `Guild` row + Redis cache (`services/prefix.py`); `/setprefix` admin command
 
-### In progress / next
+### Deferred (and why)
 
-- [ ] Migrate prefix lookup to `Guild` + Redis cache
-- [ ] Replace `requests` with `aiohttp` in `fin_cog`, `view_cog`, `utility`
-- [ ] Replace `print` with `structlog` everywhere
-- [ ] Item-use loop: `/use <item>` + per-item effect hooks (unblocks consumables: bread, coffee)
-- [ ] Redis-backed leaderboards (sorted-set over `transactions` totals)
-- [ ] Mini-games: blackjack, slots, dice
-- [ ] Fishing cog (consumes/uses `fishing_rod` from the catalog)
-- [ ] Lottery cog (consumes `lottery_ticket`; weekly draw)
-- [ ] Robbery cog: `/rob` + `padlock` defense
-- [ ] Reminders cog
-- [ ] Weather cog
-- [ ] Tests with `dpytest` (Discord-side interaction tests, complementing the service tests)
-- [ ] Migrate remaining legacy cogs: `admin`, `attendance`, `avatar_cog`, `doge_cog`, `fin_cog`, `help_cog`, `modal_cog`, `moderation`, `snipe_cog`, `utility`, `view_cog`
-- [ ] Delete `data/rpg.json` and `data/stats2.json` once their consumers are migrated
-- [ ] Production deploy notes (systemd unit, log shipping)
+These items aren't blocked technically, but each needs a decision or substantial work that didn't make sense in the same push:
+
+- [ ] **Replace `requests` with `aiohttp` in `fin_cog`** — `yfinance` is a synchronous library, so the right fix is `asyncio.to_thread(...)` to run yfinance off the event loop, NOT a one-line aiohttp swap. Hold until the fin_cog rewrite.
+- [ ] **Replace `requests` with `aiohttp` in `view_cog`, `utility`** — needs reading what each call is actually for; skipped to avoid breaking legacy paths blindly.
+- [ ] **Weather cog** — needs an API choice (Open-Meteo for free / no-key, OpenWeatherMap for richer data) and config. User decision.
+- [ ] **Tests with `dpytest`** — Discord-side interaction tests. Substantial harness setup; service-layer tests already cover the business logic. Worth doing once the cog surface stabilizes.
+- [ ] **Migrate remaining legacy cogs** — `admin`, `attendance`, `avatar_cog`, `doge_cog`, `fin_cog`, `help_cog`, `modal_cog`, `moderation`, `snipe_cog`, `utility`, `view_cog`. Each needs reading + understanding before it can be ported. They run today in their old shape; do these incrementally as you touch them for any other reason.
+- [ ] **Delete `data/rpg.json`** — orphaned (rpg_cog migrated to `cogs/economy.py`). Safe to delete after a final visual sanity check; the import script in `scripts/import_legacy_rpg.py` would still need it if you re-import, so deleting is a soft commit to "I'm done with that data."
+- [ ] **Delete `data/stats2.json`** — still read by at least `cogs/attendance.py`. Delete after attendance migrates.
+- [ ] **Delete `prefixes.json`** — no longer read by `bot.py`. Safe to delete.
+- [ ] **Production deploy notes (systemd unit, log shipping)** — needs hosting decisions (Render? Fly.io? VPS?).
+
+### Maybe
+
+- Buff system: `/use` currently emits flavor text. The handler signature already takes `session` + `user_id`, so adding a "well-fed +50% next /work payout" buff is a Redis-backed temporary key away.
+- Auto-draw lottery: weekly cron task that calls `services.lottery.draw` without admin invocation.
+- Guild settings: extend `Guild` model for disabled commands, mod-log channel, welcome message.
 
 ---
 

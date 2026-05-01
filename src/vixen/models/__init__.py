@@ -12,11 +12,11 @@ from .user import User
 
 __all__ = [
     "Base",
-    "TimestampMixin",
     "Guild",
     "InventoryItem",
     "LotteryEntry",
     "Reminder",
+    "TimestampMixin",
     "Transaction",
     "User",
 ]
