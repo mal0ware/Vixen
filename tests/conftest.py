@@ -32,6 +32,7 @@ import os
 from collections.abc import AsyncIterator
 
 import pytest_asyncio
+import redis.asyncio as redis_async
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -40,6 +41,7 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.pool import NullPool
 
+from vixen import cache as cache_module
 from vixen.models import Base
 
 # --- Connection URLs ---
@@ -50,6 +52,14 @@ _BOOTSTRAP_URL = os.environ.get(
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://vixen:vixen@localhost:5433/vixen_test",
+)
+
+# Redis test DB. Defaults to db=1 so we never collide with the bot's db=0.
+# Override with TEST_REDIS_URL if your dev Redis already uses db=1 for
+# something else.
+TEST_REDIS_URL = os.environ.get(
+    "TEST_REDIS_URL",
+    "redis://localhost:6380/1",
 )
 
 
@@ -144,3 +154,31 @@ async def db_session(_test_db_url: str) -> AsyncIterator[AsyncSession]:
             )
     finally:
         await engine.dispose()
+
+
+# --------------------------------------------------------------------------- #
+# Redis fixture
+# --------------------------------------------------------------------------- #
+
+
+@pytest_asyncio.fixture
+async def redis_client() -> AsyncIterator[redis_async.Redis]:
+    """Per-test Redis client pointed at db=1, flushed entering and leaving.
+
+    Patches `vixen.cache._redis` so any service that calls `cache.redis()`
+    (cooldown, future leaderboards) talks to the test db automatically.
+    The bot uses db=0 by default, so we never touch real cooldowns. We
+    also `flushdb` at the start to wipe any leftover state from a crashed
+    previous run.
+    """
+    client = redis_async.from_url(TEST_REDIS_URL, decode_responses=True)
+    original = cache_module._redis
+    cache_module._redis = client
+
+    try:
+        await client.flushdb()
+        yield client
+    finally:
+        await client.flushdb()
+        await client.aclose()
+        cache_module._redis = original
