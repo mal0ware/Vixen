@@ -198,25 +198,139 @@ This is the same pattern as Dank Memer's economy and is well-trodden territory.
 
 ---
 
+## Adding a feature
+
+Every cog on the new stack follows the same five-step pipeline. The shop (shipped 2026-04-30) is the most recent worked example — copy its shape:
+
+- `src/vixen/services/items.py` — static catalog
+- `src/vixen/services/shop.py` — service layer
+- `cogs/shop.py` — Discord cog
+- `tests/services/test_shop.py` — service tests
+
+### 1. Decide where the data lives
+
+| Need | Where |
+|---|---|
+| Small fixed catalog (items, recipes, jobs, …) | Static dict in `src/vixen/services/<thing>.py`. Switch to a real DB table only when the catalog grows past ~30 entries or admins need runtime edits. |
+| Durable user state that must survive restart | New SQLAlchemy model in `src/vixen/models/`. Add to `models/__init__.py`. Generate a migration. |
+| Hot/ephemeral state — cooldowns, leaderboards, rate limits | Redis (when the Redis usage layer lands). For now, `@commands.cooldown` decorators are the placeholder. |
+
+### 2. (Only if you added a model) Create and apply a migration
+
+```bash
+alembic revision --autogenerate -m "add foo table"
+alembic upgrade head
+```
+
+Inspect the generated file in `alembic/versions/` before applying — `--autogenerate` is a starting point, not a contract.
+
+### 3. Write the service (`src/vixen/services/<feature>.py`)
+
+Pure-Python business logic. No Discord types in here — services are testable in plain Python.
+
+Conventions:
+
+1. **Take the session from the caller.** Each function accepts an `AsyncSession` so the cog decides the transaction boundary. Composing two service calls inside one `get_session()` block makes them atomic — both succeed or neither does (e.g. `buy_item` debits cash and adds inventory in one transaction).
+2. **Auto-register on first contact.** Use `get_or_create_user(session, discord_id)` so users never see a "please register first" wall.
+3. **Audit-on-write.** Every cash mutation writes a `Transaction` row. `change_cash(session, id, delta, reason="...")` does this for you — always go through it, never mutate `User.cash` directly.
+4. **Raise typed domain errors.** Define `class FooError(EconomyError)` for each failure mode (e.g. `InsufficientFunds`, `UnknownItem`, `InsufficientItems`). The cog catches these and renders friendly messages. Never let a SQLAlchemy error reach the user.
+
+### 4. Write the cog (`cogs/<feature>.py`)
+
+A thin Discord shim: parse args, call the service, format the reply. Place new cogs at the **repo root `cogs/` directory** — that's still the active load path during the migration. Auto-discovered on next bot startup.
+
+```python
+@commands.hybrid_command(help="One-line user-facing description.")
+@app_commands.describe(arg="What this argument is for.")
+@app_commands.choices(arg=[app_commands.Choice(name="Display", value="key"), ...])  # for fixed-set inputs
+@commands.cooldown(1, 15, commands.BucketType.user)                                  # if rate-limiting needed
+async def my_command(self, ctx: commands.Context, arg: str) -> None:
+    try:
+        async with get_session() as session:
+            result = await my_service_call(session, ctx.author.id, arg)
+    except KnownDomainError as e:
+        await ctx.reply(f"Friendly message using `{e.field}`.", ephemeral=True)
+        return
+    await ctx.reply(f"Success: {result}")
+```
+
+Conventions:
+
+- `@commands.hybrid_command` so both slash (`/cmd`) and prefix (`!cmd`) work in one decorator.
+- User-facing errors → `ctx.reply(..., ephemeral=True)` — only the user sees them, no spam.
+- Use `<t:UNIX:R>` in embeds for relative timestamps; Discord renders them in the viewer's locale.
+- Cog `__init__` should be cheap. No DB calls, no network. Keep heavy lifting in command handlers.
+
+End the file with:
+
+```python
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(MyCog(bot))
+```
+
+### 5. Write tests (`tests/services/test_<feature>.py`)
+
+Service tests use the `db_session` fixture from `tests/conftest.py` — real Postgres on the test database, schema applied once, tables truncated between tests. No DB mocking; nothing fakes around real semantics.
+
+Cover at minimum:
+- Happy path
+- Each typed error path
+- Any rollback / atomicity invariant (e.g. "a failed buy must not have left an inventory row")
+
+```bash
+pytest tests/services/test_<feature>.py -v
+```
+
+### 6. Run and smoke-test
+
+```bash
+.venv/bin/python3 -m vixen
+```
+
+In your dev guild, exercise each command. Slash commands sync to the dev guild on every startup (fast). Prod uses global sync (slow, hours of propagation) — only when shipping a stable surface.
+
+### Checklist
+
+- [ ] (If new table) model added, `models/__init__.py` updated, migration generated and applied
+- [ ] Service module written; takes session from caller; raises typed errors
+- [ ] Cog written; `@commands.hybrid_command`; user-facing errors are `ephemeral=True`
+- [ ] Tests written and passing
+- [ ] `ruff check <new files>` clean (or matches existing project warnings)
+- [ ] Smoke-tested in the dev guild
+
+---
+
 ## Roadmap
+
+### Done
 
 - [x] Cleanup: remove JS-era leftovers, fix broken refs, rotate leaked token
 - [x] Project metadata: `pyproject.toml`, `docker-compose.yml`, `.env.example`
 - [x] Source skeleton: `config.py`, `logging.py`, `db.py`, `cache.py`
 - [x] Schema: `User`, `Guild`, `InventoryItem`, `Transaction`
 - [x] Alembic wired (env.py, ini, template)
-- [ ] `src/vixen/bot.py` — refactored entrypoint with init_db / init_redis hooks
-- [ ] First Alembic migration: create the four base tables
-- [ ] Migrate `rpg_cog` to use `User` + `Transaction` instead of `data/rpg.json`
+- [x] `src/vixen/bot.py` — entrypoint with init_db / init_redis hooks, structured logging, fault-tolerant cog loader
+- [x] First Alembic migration: the four base tables
+- [x] Migrate `rpg_cog` → `cogs/economy.py` (Postgres-backed `/profile`, `/work`, `/coinflip`)
+- [x] Service-layer test infrastructure (per-test Postgres DB, truncate-between-tests)
+- [x] Shop / inventory commands (`/shop`, `/buy`, `/sell`, `/inventory`)
+
+### In progress / next
+
 - [ ] Migrate prefix lookup to `Guild` + Redis cache
 - [ ] Replace `requests` with `aiohttp` in `fin_cog`, `view_cog`, `utility`
 - [ ] Replace `print` with `structlog` everywhere
-- [ ] Mini-games: blackjack, slots, dice, fishing, lottery
-- [ ] Shop / inventory commands
-- [ ] Leaderboards via Redis sorted sets
+- [ ] Item-use loop: `/use <item>` + per-item effect hooks (unblocks consumables: bread, coffee)
+- [ ] Redis-backed cooldowns + leaderboards (replaces the `@commands.cooldown` placeholders)
+- [ ] Mini-games: blackjack, slots, dice
+- [ ] Fishing cog (consumes/uses `fishing_rod` from the catalog)
+- [ ] Lottery cog (consumes `lottery_ticket`; weekly draw)
+- [ ] Robbery cog: `/rob` + `padlock` defense
 - [ ] Reminders cog
 - [ ] Weather cog
-- [ ] Tests with `dpytest`
+- [ ] Tests with `dpytest` (Discord-side interaction tests, complementing the service tests)
+- [ ] Migrate remaining legacy cogs: `admin`, `attendance`, `avatar_cog`, `doge_cog`, `fin_cog`, `help_cog`, `modal_cog`, `moderation`, `snipe_cog`, `utility`, `view_cog`
+- [ ] Delete `data/rpg.json` and `data/stats2.json` once their consumers are migrated
 - [ ] Production deploy notes (systemd unit, log shipping)
 
 ---
