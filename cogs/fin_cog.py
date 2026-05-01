@@ -1,272 +1,356 @@
-import os
-import json
-import random
+"""Financial analysis cog.
 
-# Force a headless matplotlib backend BEFORE importing pyplot. The default
-# on macOS is "MacOSX", which spins up a native Python.app window every
-# time we render a figure — visible as a "Python" app appearing in the
-# Dock when /rsi or /moving_average runs. We only ever savefig() to disk
-# and upload the PNG to Discord, so no GUI is needed. Agg is the standard
-# headless renderer; this must be set before `import matplotlib.pyplot`.
+Commands:
+    /chart <ticker> [timeframe] [type]   primary command, interactive view
+    /candles <ticker> [timeframe]        OHLC candles (shortcut)
+    /rsi <ticker> [timeframe]            price + MAs + RSI (shortcut)
+    /moving_average <ticker> [timeframe] price + MAs (shortcut)
+
+The cog is thin: validate args, hit `services.finance` for data,
+`services.charts` for the PNG bytes, ship a `discord.File`. The
+non-trivial bit is the interactive view on /chart — buttons let users
+re-render at a different timeframe without retyping the command. We
+edit the original message rather than posting a new one each click,
+keeping the channel tidy.
+"""
+
+# Headless matplotlib backend MUST be selected before pyplot imports
+# anywhere in the process. Setting it here as well as in services.charts
+# is harmless — `matplotlib.use("Agg")` is idempotent.
 import matplotlib
+
 matplotlib.use("Agg")
 
+import io
+
 import discord
-import requests
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-import yfinance as yf
-
-from discord.ui import View, Button
-from discord.ext import commands
 from discord import app_commands
-from dotenv import load_dotenv
+from discord.ext import commands
+
+from vixen.services import charts
+from vixen.services.cooldown import try_acquire
+from vixen.services.finance import (
+    DEFAULT_TIMEFRAME,
+    TIMEFRAMES,
+    compute_moving_averages,
+    compute_rsi,
+    download_history,
+    last_price,
+    percent_change,
+)
+
+# Slash-choice list for the timeframe parameter. Same order as TIMEFRAMES
+# so the dropdown matches the natural progression short-to-long.
+_TIMEFRAME_CHOICES: list[app_commands.Choice[str]] = [
+    app_commands.Choice(name=tf, value=tf) for tf in TIMEFRAMES
+]
 
 
-class finCog(commands.Cog):
+_CHART_TYPE_CHOICES: list[app_commands.Choice[str]] = [
+    app_commands.Choice(name="Line + MAs", value="line"),
+    app_commands.Choice(name="Candles", value="candles"),
+    app_commands.Choice(name="Price + RSI", value="rsi"),
+]
+
+
+# --------------------------------------------------------------------------- #
+# Renderer dispatch — single place that maps "what kind of chart?" to bytes
+# --------------------------------------------------------------------------- #
+
+
+async def _render_chart(
+    ticker: str, timeframe: str, chart_type: str
+) -> tuple[bytes, str] | None:
+    """Download data and render. Returns (png_bytes, summary_line) or None on
+    empty data so the caller can tell the user `ticker` doesn't exist.
     """
-    Cog providing simple financial analysis commands using yfinance data.
-    
-    Exposes:
-    - /rsi (or !rsi)            : download OHLC data, compute RSI + MAs,
-                                  plot price + MAs + RSI and show table with RSI
-    - /moving_average (or !...) : download OHLC data, compute and plot moving
-                                  averages and show table without RSI
+    df = await download_history(ticker, timeframe)
+    if df.empty:
+        return None
 
-    Other files are expected to only load this Cog; public command names
-    (rsi, moving_average) and their signatures must stay stable.
+    # Indicators are cheap; compute everything so the renderers can pick.
+    compute_moving_averages(df)
+    if chart_type == "rsi":
+        compute_rsi(df)
+
+    if chart_type == "candles":
+        png = charts.render_candles(df, ticker, timeframe)
+    elif chart_type == "rsi":
+        png = charts.render_price_with_rsi(df, ticker, timeframe)
+    else:  # "line"
+        png = charts.render_price_with_mas(df, ticker, timeframe)
+
+    # One-line summary that goes in the message above the chart. Shows the
+    # last close + relative change over the timeframe — enough context to
+    # read at a glance without scrolling the chart.
+    last = last_price(df)
+    pct = percent_change(df)
+    sign = "+" if pct >= 0 else ""
+    summary = (
+        f"**{ticker.upper()}** — last **{last:,.2f}**, "
+        f"{sign}{pct:.2f}% over **{timeframe}**"
+    )
+    return png, summary
+
+
+# --------------------------------------------------------------------------- #
+# Interactive view — timeframe buttons that re-render in place
+# --------------------------------------------------------------------------- #
+
+
+class _ChartView(discord.ui.View):
+    """A row of timeframe buttons under a /chart message.
+
+    Clicking a button re-downloads, re-renders, and edits the message
+    with the new chart. The original requester is the only one allowed
+    to use the buttons — otherwise a stranger could spam someone else's
+    message into a different timeframe.
+
+    Times out after 5 minutes; after that, button clicks return a polite
+    "this is stale" reply and the bot stops listening.
     """
+
+    def __init__(
+        self,
+        *,
+        ticker: str,
+        chart_type: str,
+        owner_id: int,
+        initial_timeframe: str,
+    ):
+        super().__init__(timeout=300)
+        self.ticker = ticker
+        self.chart_type = chart_type
+        self.owner_id = owner_id
+        self.current_timeframe = initial_timeframe
+
+        # One button per timeframe. The button currently in use is rendered
+        # in primary blue; the others are secondary grey. Clicking re-runs
+        # _render_and_edit which updates this state.
+        for tf in TIMEFRAMES:
+            self.add_item(_TimeframeButton(tf, active=(tf == initial_timeframe)))
+
+    async def interaction_check(
+        self, interaction: discord.Interaction
+    ) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message(
+                "These buttons belong to whoever ran `/chart`. "
+                "Run your own `/chart` to control your view.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        # Disable all buttons so they grey out client-side. We can't edit
+        # the message here cleanly without storing it; discord.py renders
+        # disabled state on the next interaction attempt.
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+
+
+class _TimeframeButton(discord.ui.Button):
+    """One pill-shaped timeframe button. The View owns the data + state."""
+
+    def __init__(self, timeframe: str, *, active: bool):
+        super().__init__(
+            label=timeframe,
+            style=(
+                discord.ButtonStyle.primary
+                if active
+                else discord.ButtonStyle.secondary
+            ),
+            custom_id=f"chart_tf_{timeframe}",
+        )
+        self.timeframe = timeframe
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: _ChartView = self.view  # type: ignore[assignment]
+
+        # Update the view's internal state and the visual highlight.
+        view.current_timeframe = self.timeframe
+        for child in view.children:
+            if isinstance(child, _TimeframeButton):
+                child.style = (
+                    discord.ButtonStyle.primary
+                    if child.timeframe == self.timeframe
+                    else discord.ButtonStyle.secondary
+                )
+
+        # Defer first — re-rendering can take a few seconds (network +
+        # mpl) which would blow past Discord's 3-second interaction
+        # response window without this.
+        await interaction.response.defer()
+
+        result = await _render_chart(
+            view.ticker, view.timeframe_or(self.timeframe), view.chart_type
+        )
+        if result is None:
+            await interaction.followup.send(
+                f"Couldn't reload data for `{view.ticker}`.", ephemeral=True
+            )
+            return
+
+        png, summary = result
+        await interaction.edit_original_response(
+            content=summary,
+            attachments=[
+                discord.File(io.BytesIO(png), filename="chart.png")
+            ],
+            view=view,
+        )
+
+
+# Convenience: the view occasionally references its own current timeframe
+# from a button's perspective. We attach this as a method instead of a
+# property to keep the call site explicit.
+def _timeframe_or(self: _ChartView, fallback: str) -> str:
+    return self.current_timeframe or fallback
+
+
+_ChartView.timeframe_or = _timeframe_or  # type: ignore[attr-defined]
+
+
+# --------------------------------------------------------------------------- #
+# Cog
+# --------------------------------------------------------------------------- #
+
+
+class FinCog(commands.Cog):
+    """Charts and indicators. Data via yfinance, rendered in-process."""
 
     def __init__(self, bot: commands.Bot):
-        # Keep bot reference for potential future use
         self.bot = bot
 
-    # --------------------------------------------------------------------- #
-    # Helper methods (not commands)
-    # --------------------------------------------------------------------- #
+    # ---------------------------------------------------------------- #
+    # Common cooldown + render path used by every command below.
+    # ---------------------------------------------------------------- #
 
-    def compute_rsi(self, data: pd.DataFrame, window: int = 14) -> pd.DataFrame:
-        """
-        Compute the Relative Strength Index (RSI) for a price DataFrame.
-
-        Expects:
-          - data: DataFrame containing a 'Close' column.
-          - window: RSI period, typically 14.
-
-        Returns:
-          The same DataFrame with an added 'RSI' column.
-        """
-        # Price change between consecutive rows
-        delta = data["Close"].diff()
-
-        # Separate gains and losses
-        gain = delta.clip(lower=0)
-        loss = -delta.clip(upper=0)
-
-        # Rolling averages of gains and losses
-        avg_gain = gain.rolling(window=window, min_periods=window).mean()
-        avg_loss = loss.rolling(window=window, min_periods=window).mean()
-
-        # Relative strength (RS) and RSI calculation
-        rs = avg_gain / avg_loss
-        data["RSI"] = 100 - (100 / (1 + rs))
-
-        return data
-
-    def _download_price_data(
+    async def _do_chart_reply(
         self,
+        ctx: commands.Context,
         ticker: str,
-        start: str = "2025-01-01",
-        end: str = "2025-10-01",
-    ) -> pd.DataFrame:
-        """
-        Small wrapper around yfinance.download for consistency and future changes.
+        timeframe: str,
+        chart_type: str,
+        *,
+        with_view: bool = False,
+    ) -> None:
+        # Anti-spam cooldown shared across all chart commands — switching
+        # between /rsi, /candles, /chart shouldn't let a user bypass.
+        remaining = await try_acquire(ctx.author.id, "fin_chart")
+        if remaining > 0:
+            await ctx.reply(
+                f"Slow down — try again in {remaining:.0f}s.", ephemeral=True
+            )
+            return
 
-        Returns:
-          DataFrame with OHLCV data. May be empty if ticker is invalid.
-        """
-        return yf.download(ticker, start=start, end=end)
+        # Slash command interactions can take longer than 3s to respond
+        # to. Defer so Discord doesn't time us out while yfinance loads.
+        if ctx.interaction is not None:
+            await ctx.defer()
 
-    def _prepare_output_path(self, user_id: int) -> str:
-        """
-        Create and return the output path for plots for a specific user.
-        File name is kept as 'savings_boxplot.png' to preserve external expectations.
-        """
-        output_dir = f"temp/{user_id}"
-        os.makedirs(output_dir, exist_ok=True)
-        return os.path.join(output_dir, "savings_boxplot.png")
+        result = await _render_chart(ticker, timeframe, chart_type)
+        if result is None:
+            await ctx.reply(
+                f"No data for ticker `{ticker}` over `{timeframe}`. "
+                f"Check the symbol and try again.",
+                ephemeral=True,
+            )
+            return
 
-    def _finalize_plot(self, save_path: str) -> None:
-        """
-        Save the current matplotlib figure and clear it to avoid overlaps
-        between different command invocations.
-        """
-        plt.tight_layout()
-        plt.savefig(save_path)
-        plt.clf()
+        png, summary = result
+        file = discord.File(io.BytesIO(png), filename="chart.png")
 
-    def _send_dataframe_preview(
+        if with_view:
+            view = _ChartView(
+                ticker=ticker,
+                chart_type=chart_type,
+                owner_id=ctx.author.id,
+                initial_timeframe=timeframe,
+            )
+            await ctx.reply(content=summary, file=file, view=view)
+        else:
+            await ctx.reply(content=summary, file=file)
+
+    # ---------------------------------------------------------------- #
+    # /chart — primary command, with timeframe buttons
+    # ---------------------------------------------------------------- #
+
+    @commands.hybrid_command(
+        help="Chart a ticker. Buttons let you switch timeframe in place."
+    )
+    @app_commands.describe(
+        ticker="Symbol like AAPL, MSFT, BTC-USD.",
+        timeframe="Lookback window. Default 3mo.",
+        chart_type="Line + MAs / Candles / Price + RSI.",
+    )
+    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES, chart_type=_CHART_TYPE_CHOICES)
+    async def chart(
         self,
-        df: pd.DataFrame,
-        columns: list[str],
-        rows: int = 10,
-    ) -> str:
-        """
-        Prepare a small, text-based preview of the DataFrame for Discord.
+        ctx: commands.Context,
+        ticker: str,
+        timeframe: str = DEFAULT_TIMEFRAME,
+        chart_type: str = "line",
+    ) -> None:
+        await self._do_chart_reply(
+            ctx, ticker, timeframe, chart_type, with_view=True
+        )
 
-        Arguments:
-          - df: DataFrame with data.
-          - columns: List of columns to include in the preview.
-          - rows: Number of rows from the end of the DataFrame to show.
+    # ---------------------------------------------------------------- #
+    # /candles
+    # ---------------------------------------------------------------- #
 
-        Returns:
-          A string formatted as a code block for Discord.
-        """
-        # Take the last N rows of the selected columns to keep it short
-        preview = df[columns].tail(rows)
-
-        # Round numeric values for readability
-        preview = preview.round(2)
-
-        # Convert to plain text table
-        table_str = preview.to_string()
-
-        # Wrap as a Discord code block
-        return f"```{table_str}```"
-
-    # --------------------------------------------------------------------- #
-    # Commands
-    # --------------------------------------------------------------------- #
-
-    @commands.hybrid_command(help="Analyze a ticker using RSI and moving averages")
-    @commands.cooldown(1, 15, commands.BucketType.guild)
+    @commands.hybrid_command(help="OHLC candlestick chart with volume.")
     @app_commands.describe(
-        ticker="The ticker to analyze (e.g. AAPL, MSFT, SPY).",
+        ticker="Symbol like AAPL.",
+        timeframe="Lookback window. Default 3mo.",
     )
-    async def rsi(self, ctx: commands.Context, ticker: str):
-        """
-        Hybrid command:
-          - Downloads price data for the given ticker.
-          - Computes 20-day and 50-day moving averages.
-          - Computes RSI using compute_rsi().
-          - Plots Close, MA20, MA50 on the top axis and RSI on the bottom axis.
-          - Sends the plot image.
-          - Sends a text preview of the last rows of the DataFrame including RSI.
+    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
+    async def candles(
+        self,
+        ctx: commands.Context,
+        ticker: str,
+        timeframe: str = DEFAULT_TIMEFRAME,
+    ) -> None:
+        await self._do_chart_reply(ctx, ticker, timeframe, "candles")
 
-        This makes the RSI command visually and textually distinct from the
-        moving_average command.
-        """
-        data = self._download_price_data(ticker)
+    # ---------------------------------------------------------------- #
+    # /rsi (backwards-compatible)
+    # ---------------------------------------------------------------- #
 
-        # Basic sanity check: empty data usually means invalid ticker or no data
-        if data.empty:
-            await ctx.reply(f"Failed to download data for ticker `{ticker}`.")
-            return
-
-        # Compute moving averages for plotting
-        data["MA20"] = data["Close"].rolling(window=20, min_periods=1).mean()
-        data["MA50"] = data["Close"].rolling(window=50, min_periods=1).mean()
-
-        # Compute RSI and keep it in the DataFrame
-        data = self.compute_rsi(data)
-
-        # Create a 2-row figure: price + MAs on top, RSI on bottom
-        fig, (ax_price, ax_rsi) = plt.subplots(
-            2, 1, figsize=(10, 8), sharex=True, gridspec_kw={"height_ratios": [3, 1]}
-        )
-
-        # Top subplot: close price and moving averages
-        ax_price.plot(data.index, data["Close"], label="Close")
-        ax_price.plot(data.index, data["MA20"], label="MA20")
-        ax_price.plot(data.index, data["MA50"], label="MA50")
-        ax_price.set_ylabel("Price")
-        ax_price.legend(loc="upper left")
-        ax_price.set_title(f"{ticker} Price with MA20 / MA50")
-
-        # Bottom subplot: RSI
-        ax_rsi.plot(data.index, data["RSI"], label="RSI")
-        ax_rsi.axhline(70, linestyle="--")  # typical overbought level
-        ax_rsi.axhline(30, linestyle="--")  # typical oversold level
-        ax_rsi.set_ylabel("RSI")
-        ax_rsi.set_xlabel("Date")
-        ax_rsi.legend(loc="upper left")
-
-        save_path = self._prepare_output_path(ctx.author.id)
-        self._finalize_plot(save_path)
-
-        # Send the plot
-        await ctx.channel.send(
-            content=f"Your RSI + MA analysis for `{ticker}`:",
-            file=discord.File(save_path),
-        )
-
-        # Send a dataframe preview including RSI so you can see the numbers directly
-        preview_text = self._send_dataframe_preview(
-            data,
-            columns=["Close", "MA20", "MA50", "RSI"],
-            rows=10,
-        )
-        await ctx.channel.send(content=f"Last rows (with RSI) for `{ticker}`:\n{preview_text}")
-
-    @commands.hybrid_command(help="Analyze a ticker using moving averages only")
-    @commands.cooldown(1, 15, commands.BucketType.guild)
+    @commands.hybrid_command(help="Price + MAs + RSI in one chart.")
     @app_commands.describe(
-        ticker="The ticker to analyze (e.g. AAPL, MSFT, SPY).",
+        ticker="Symbol like AAPL.",
+        timeframe="Lookback window. Default 3mo.",
     )
-    async def moving_average(self, ctx: commands.Context, ticker: str):
-        """
-        Hybrid command:
-          - Downloads price data for the given ticker.
-          - Computes 20-day and 50-day moving averages.
-          - Plots Close, MA20, MA50 on a single chart and sends it as an image.
-          - Sends a text preview of the last rows of the DataFrame with just
-            price and moving averages (no RSI column).
+    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
+    async def rsi(
+        self,
+        ctx: commands.Context,
+        ticker: str,
+        timeframe: str = DEFAULT_TIMEFRAME,
+    ) -> None:
+        await self._do_chart_reply(ctx, ticker, timeframe, "rsi")
 
-        This produces a different visual and textual output from the RSI command.
-        """
-        data = self._download_price_data(ticker)
+    # ---------------------------------------------------------------- #
+    # /moving_average (backwards-compatible)
+    # ---------------------------------------------------------------- #
 
-        if data.empty:
-            await ctx.reply(f"Failed to download data for ticker `{ticker}`.")
-            return
-
-        # Calculate short-term and long-term moving averages
-        data["MA20"] = data["Close"].rolling(window=20, min_periods=1).mean()
-        data["MA50"] = data["Close"].rolling(window=50, min_periods=1).mean()
-
-        # Plot price and moving averages
-        plt.figure(figsize=(10, 6))
-        plt.plot(data.index, data["Close"], label="Close")
-        plt.plot(data.index, data["MA20"], label="MA20")
-        plt.plot(data.index, data["MA50"], label="MA50")
-        plt.ylabel("Price")
-        plt.xlabel("Date")
-        plt.title(f"{ticker} Price with MA20 / MA50")
-        plt.legend(loc="upper left")
-
-        save_path = self._prepare_output_path(ctx.author.id)
-        self._finalize_plot(save_path)
-
-        # Send the plot
-        await ctx.channel.send(
-            content=f"Your moving average analysis for `{ticker}`:",
-            file=discord.File(save_path),
-        )
-
-        # Send a dataframe preview without RSI (to distinguish from rsi command)
-        preview_text = self._send_dataframe_preview(
-            data,
-            columns=["Close", "MA20", "MA50"],
-            rows=10,
-        )
-        await ctx.channel.send(content=f"Last rows (MAs only) for `{ticker}`:\n{preview_text}")
+    @commands.hybrid_command(help="Price with 20- and 50-day moving averages.")
+    @app_commands.describe(
+        ticker="Symbol like AAPL.",
+        timeframe="Lookback window. Default 3mo.",
+    )
+    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
+    async def moving_average(
+        self,
+        ctx: commands.Context,
+        ticker: str,
+        timeframe: str = DEFAULT_TIMEFRAME,
+    ) -> None:
+        await self._do_chart_reply(ctx, ticker, timeframe, "line")
 
 
-async def setup(bot: commands.Bot):
-    """
-    Standard async setup function used by discord.py to load the Cog.
-    Other files are expected to call bot.load_extension(...) which will
-    invoke this function.
-    """
-    await bot.add_cog(finCog(bot))
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(FinCog(bot))
