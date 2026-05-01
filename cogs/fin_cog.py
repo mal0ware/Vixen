@@ -2,6 +2,15 @@ import os
 import json
 import random
 
+# Force a headless matplotlib backend BEFORE importing pyplot. The default
+# on macOS is "MacOSX", which spins up a native Python.app window every
+# time we render a figure — visible as a "Python" app appearing in the
+# Dock when /rsi or /moving_average runs. We only ever savefig() to disk
+# and upload the PNG to Discord, so no GUI is needed. Agg is the standard
+# headless renderer; this must be set before `import matplotlib.pyplot`.
+import matplotlib
+matplotlib.use("Agg")
+
 import discord
 import requests
 import matplotlib.pyplot as plt
