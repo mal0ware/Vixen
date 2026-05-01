@@ -2,6 +2,12 @@
 .env
 *.env.local
 discordbotinfo*.txt
+# Editor backup files (nano writes <file>.save when you Ctrl-O without confirming
+# overwrite; vim writes ~ and .swp). Some of these can contain copies of .env.
+*.save
+*~
+*.swp
+*.swo
 
 # --- Python ---
 __pycache__/
