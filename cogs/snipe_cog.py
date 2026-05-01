@@ -235,8 +235,11 @@ class SnipeCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         
-    @commands.hybrid_command(help="Send the snipe leaderboard")
-    async def leaderboard(self, ctx: commands.Context):
+    # Renamed from /leaderboard to /snipe_leaderboard to free the bare
+    # /leaderboard name for the new wealth leaderboard cog. The handler
+    # logic is unchanged.
+    @commands.hybrid_command(name="snipe_leaderboard", help="Send the snipe leaderboard")
+    async def snipe_leaderboard(self, ctx: commands.Context):
         view = LeaderboardView(ctx)
         view.message = await ctx.reply(embed=view.generate_embed(), view=view, ephemeral=True)
 

@@ -74,17 +74,31 @@ def _load_json(path: Path) -> dict:
         return json.load(f)
 
 
-def _make_prefix_callable(prefixes: dict[str, str], default: str = "!"):
-    """Return a discord.py-compatible prefix callable.
+def _make_prefix_callable():
+    """Return a discord.py-compatible async prefix callable.
 
-    The callable receives (bot, message) on every incoming message and must
-    return the prefix string for that context. We look up by guild_id (or
-    author_id for DMs) and fall back to `default`.
+    discord.py supports `command_prefix` being either a static value, a
+    list, or a callable that returns a string / list / coroutine. We use
+    the async variant so we can hit Postgres + Redis on every message
+    without blocking the event loop.
+
+    Lookup path (delegated to `services.prefix.get_prefix`):
+        1. Redis cache (5-minute TTL) — fast hot path.
+        2. Postgres `guilds` row — durable source of truth.
+        3. Default "!"  — guild has never had a prefix set.
+
+    The DEFAULT_PREFIX is also returned for DMs (no guild). DMs aren't a
+    big use case for prefix commands; if someone wants to set a per-DM
+    prefix later, the same pattern extends with author_id keys.
     """
+    from .db import get_session
+    from .services.prefix import DEFAULT_PREFIX, get_prefix
 
-    def prefix(bot: commands.Bot, message: discord.Message) -> str:
-        gid = message.guild.id if message.guild else message.author.id
-        return prefixes.get(str(gid), default)
+    async def prefix(bot: commands.Bot, message: discord.Message) -> str:
+        if message.guild is None:
+            return DEFAULT_PREFIX
+        async with get_session() as session:
+            return await get_prefix(session, message.guild.id)
 
     return prefix
 
@@ -201,7 +215,9 @@ def _build_bot() -> VixenBot:
     """
     legacy_data = _load_json(PROJECT_ROOT / "data.json")
     legacy_stats2 = _load_json(PROJECT_ROOT / "data" / "stats2.json")
-    legacy_prefixes = _load_json(PROJECT_ROOT / "prefixes.json")
+    # `prefixes.json` is no longer read — guild prefixes live in Postgres
+    # via `services.prefix.get_prefix`, cached in Redis. The file can be
+    # deleted once we verify no environment still falls back on it.
 
     intents = discord.Intents.default()
     # Required to read message content for prefix-style commands. Must also
@@ -210,7 +226,7 @@ def _build_bot() -> VixenBot:
 
     bot = VixenBot(
         intents=intents,
-        prefix_callable=_make_prefix_callable(legacy_prefixes),
+        prefix_callable=_make_prefix_callable(),
     )
 
     # Attribute aliases used by existing cogs (admin, snipe, etc.).

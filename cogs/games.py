@@ -55,10 +55,9 @@ class GamesCog(commands.Cog):
     # ---------------------------------------------------------------- #
 
     @commands.hybrid_command(
-        help=(
-            "Roll 2 dice. Snake eyes (2) and boxcars (12) pay 10x, lucky 7 "
-            "returns your wager, anything else loses."
-        )
+        # Discord caps slash-command descriptions at 100 characters; keep
+        # this string short enough to pass that validation.
+        help="Roll 2d6. Snake eyes/boxcars pay 10x, 7 returns your wager, else loses."
     )
     @app_commands.describe(wager="Cash to risk (positive integer).")
     async def dice(self, ctx: commands.Context, wager: int) -> None:
