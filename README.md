@@ -49,7 +49,8 @@ vixen/
 │   └── versions/              # generated migrations (one per schema change)
 ├── src/vixen/
 │   ├── __init__.py
-│   ├── bot.py                 # (forthcoming) VixenBot + entrypoint
+│   ├── __main__.py            # `python -m vixen` -> bot.run()
+│   ├── bot.py                 # VixenBot subclass + entrypoint
 │   ├── config.py              # pydantic-settings Settings
 │   ├── logging.py             # structlog setup
 │   ├── db.py                  # async SQLAlchemy session factory
@@ -60,20 +61,27 @@ vixen/
 │   │   ├── guild.py           # per-server settings (prefix, etc.)
 │   │   ├── inventory.py       # user-owned items (qty per item_key)
 │   │   └── transaction.py     # append-only audit log of cash movements
-│   ├── services/              # (forthcoming) business logic — cogs stay thin
-│   └── cogs/                  # (forthcoming) command modules, organized by domain
-├── tests/                     # (forthcoming)
+│   └── services/              # business logic — cogs stay thin
+│       ├── economy.py         # change_cash, get_or_create_user, typed errors
+│       ├── shop.py            # buy/sell/list inventory; atomic at cog boundary
+│       └── items.py           # static item catalog (name, price, sell_price)
+├── tests/
+│   ├── conftest.py            # per-test Postgres DB fixture
+│   └── services/              # service-layer tests (real DB, no mocks)
 │
-├── cogs/                      # LEGACY — still live, JSON-backed; migrating to src/vixen/cogs/
-├── data/                      # LEGACY — JSON state files; migrating to Postgres
-├── main.py                    # LEGACY — current bot entrypoint
-├── prefixes.json              # LEGACY
-├── data.json                  # LEGACY
+├── cogs/                      # ACTIVE LOAD PATH — both new- and old-shape cogs live here
+│   ├── economy.py             # NEW SHAPE: thin cog, calls services.economy
+│   ├── shop.py                # NEW SHAPE: thin cog, calls services.shop
+│   └── (others)               # OLD SHAPE: fat cogs reading data/*.json directly
+├── data/                      # LEGACY — JSON state files; deleted as each cog migrates
+├── main.py                    # LEGACY — old bot entrypoint, superseded by src/vixen/bot.py
+├── prefixes.json              # LEGACY — guild prefix lookup, will move to Guild + Redis
+├── data.json                  # LEGACY — read by remaining old-shape cogs
 │
 └── vixenjavascriptarchive/    # archived discord.js v13 bot from 2022
 ```
 
-The legacy files at the root keep the bot running while migration proceeds. They get deleted once `src/vixen/` is feature-complete.
+Two senses of "legacy" coexist during the migration — see [Cogs and services](#cogs-and-services) below for what they mean and why the new-shape cogs live in the root `cogs/` directory rather than under `src/vixen/`.
 
 ---
 
@@ -179,9 +187,42 @@ python -m vixen
 
 Postgres is for things that must survive a restart and need real queries (joins, aggregates, transactions). Redis is for things that change every few seconds (cooldowns, presence, leaderboards) and only need fast key-based access. Trying to use one for both means you either (a) hammer Postgres with high-frequency writes that don't justify a transaction, or (b) lose user data on Redis restart. The split is the standard pattern.
 
-### Cogs vs services
+### Cogs and services
 
-A **cog** is discord.py's term for a module of related commands. In Vixen, cogs are kept *thin* — they parse arguments, call a service, and format the reply. The actual logic (compute payout, debit balance, write audit row) lives in `src/vixen/services/`. This keeps tests easy: services have no Discord dependency, so they can be tested in plain Python without mocking the API.
+A **cog** is discord.py's term for a class that groups related commands. Every command in Vixen lives in a cog. That isn't changing — what's changing is the *shape* of cogs, not the concept.
+
+#### How a cog runs end-to-end
+
+1. **Boot.** `bot.py` calls `setup_hook` once at startup. That walks the `cogs/` directory and loads every `.py` file as an extension. Each extension registers its `Cog` class with the bot via `await bot.add_cog(MyCog(bot))`.
+2. **Sync.** `bot.py` then syncs the application command tree to Discord. In dev that targets only your guild (instant); in prod it's global (slow).
+3. **Dispatch.** A user types `/buy bread 2`. Discord pushes the interaction over the gateway. discord.py routes it to `ShopCog.buy(...)` based on the registered command name.
+4. **Service call.** The cog opens a session via `async with get_session() as session:`, calls `await buy_item(session, ctx.author.id, "bread", 2)`, and waits for the result.
+5. **Persistence.** The service does its DB work on that session. The session's context manager **commits on clean exit** and **rolls back on exception** — that's how atomicity works at the cog boundary.
+6. **Reply.** The cog formats the result into a Discord message; typed errors from the service are caught and turned into friendly `ephemeral=True` replies.
+
+#### Two shapes — old (fat) vs. new (thin)
+
+| | Old shape | New shape |
+|---|---|---|
+| Discord I/O | In the cog | In the cog |
+| Business logic | In the cog | In `src/vixen/services/<feature>.py` |
+| Persistence | Read/write `data/*.json` directly | SQLAlchemy models + `get_session()` |
+| Logging | `print(...)` | `structlog.get_logger(...)` |
+| HTTP | `requests` (blocking) | `aiohttp` (async) |
+| Tests | Hard — Discord types in every function | Easy — services are plain Python |
+
+`cogs/economy.py` and `cogs/shop.py` are new shape. The other ~12 files in `cogs/` are still old shape and get rewritten one at a time.
+
+#### Why the new cogs are still in the root `cogs/`
+
+The eventual home is `src/vixen/cogs/` — everything Vixen-owned under one importable package. That move hasn't happened yet because the bot's loader currently walks the root `cogs/` directory (see `bot.py`'s `_load_cogs`). Mixing two load paths during migration adds churn for no benefit, so all cogs (new shape and old) share the same directory until the very last legacy cog migrates. At that point the loader path flips to `src/vixen/cogs/` and the root directory disappears in one commit.
+
+So when you read **"legacy"** in this repo, it means one of two independent things:
+
+- **Legacy shape** — fat cog that mixes Discord I/O, business logic, and JSON persistence. Each one rewrites individually.
+- **Legacy location** — the root `cogs/` directory. Goes away in one move once nothing legacy-shaped lives there.
+
+The new shop cog is **new shape, legacy location**. That's the normal mid-migration state.
 
 ### Mini-game pattern
 
