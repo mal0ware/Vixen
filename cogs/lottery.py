@@ -77,7 +77,8 @@ class LotteryCog(commands.Cog):
             return
 
         await interaction.response.send_message(
-            f"Staked **{count}** ticket(s). You now have **{new_total}** entries in the current draw."
+            f"Staked **{count}** ticket(s). "
+            f"You now have **{new_total}** entries in the current draw."
         )
 
     # ---------------------------------------------------------------- #
