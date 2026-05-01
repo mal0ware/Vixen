@@ -15,6 +15,7 @@ from sqlalchemy import func, select
 
 from vixen.db import get_session
 from vixen.models import InventoryItem
+from vixen.services.cooldown import try_acquire
 from vixen.services.economy import (
     InsufficientFunds,
     change_cash,
@@ -70,9 +71,15 @@ class EconomyCog(commands.Cog):
     # /work
     # ---------------------------------------------------------------- #
 
-    @commands.hybrid_command(help="Earn 25–125 cash. Cooldown: 15s.")
-    @commands.cooldown(1, 15, commands.BucketType.user)
+    @commands.hybrid_command(help="Earn 25–125 cash.")
     async def work(self, ctx: commands.Context) -> None:
+        remaining = await try_acquire(ctx.author.id, "work", seconds=5)
+        if remaining > 0:
+            await ctx.reply(
+                f"Slow down — try again in {remaining:.0f}s.", ephemeral=True
+            )
+            return
+
         profit = random.randint(25, 125)
         async with get_session() as session:
             new_balance = await change_cash(
@@ -90,10 +97,16 @@ class EconomyCog(commands.Cog):
         help="Flip a coin against a wager. Heads doubles your bet, tails loses it."
     )
     @app_commands.describe(wager="Amount to bet (must be positive).")
-    @commands.cooldown(1, 15, commands.BucketType.user)
     async def coinflip(self, ctx: commands.Context, wager: int) -> None:
         if wager <= 0:
             await ctx.reply("Wager must be a positive integer.", ephemeral=True)
+            return
+
+        remaining = await try_acquire(ctx.author.id, "coinflip", seconds=5)
+        if remaining > 0:
+            await ctx.reply(
+                f"Slow down — try again in {remaining:.0f}s.", ephemeral=True
+            )
             return
 
         won = random.randint(0, 1) == 1

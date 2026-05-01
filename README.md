@@ -284,8 +284,13 @@ A thin Discord shim: parse args, call the service, format the reply. Place new c
 @commands.hybrid_command(help="One-line user-facing description.")
 @app_commands.describe(arg="What this argument is for.")
 @app_commands.choices(arg=[app_commands.Choice(name="Display", value="key"), ...])  # for fixed-set inputs
-@commands.cooldown(1, 15, commands.BucketType.user)                                  # if rate-limiting needed
 async def my_command(self, ctx: commands.Context, arg: str) -> None:
+    # Anti-spam cooldown — short and quiet; only mutating commands need it.
+    remaining = await try_acquire(ctx.author.id, "my_command", seconds=3)
+    if remaining > 0:
+        await ctx.reply(f"Slow down — try again in {remaining:.0f}s.", ephemeral=True)
+        return
+
     try:
         async with get_session() as session:
             result = await my_service_call(session, ctx.author.id, arg)
@@ -301,6 +306,7 @@ Conventions:
 - User-facing errors → `ctx.reply(..., ephemeral=True)` — only the user sees them, no spam.
 - Use `<t:UNIX:R>` in embeds for relative timestamps; Discord renders them in the viewer's locale.
 - Cog `__init__` should be cheap. No DB calls, no network. Keep heavy lifting in command handlers.
+- **Cooldowns**: use `vixen.services.cooldown.try_acquire(user_id, bucket, seconds)` for any state-mutating command. It's Redis-backed (survives bot restarts), atomic, and bucketed per-user-per-command. Aim for **3–5s** — short enough to feel free, long enough to defeat click-spam. Read-only commands (`/shop`, `/inventory`, `/profile`) don't need one; Discord's own outbound rate limit handles message flooding.
 
 End the file with:
 
@@ -355,6 +361,7 @@ In your dev guild, exercise each command. Slash commands sync to the dev guild o
 - [x] Migrate `rpg_cog` → `cogs/economy.py` (Postgres-backed `/profile`, `/work`, `/coinflip`)
 - [x] Service-layer test infrastructure (per-test Postgres DB, truncate-between-tests)
 - [x] Shop / inventory commands (`/shop`, `/buy`, `/sell`, `/inventory`)
+- [x] Redis-backed cooldowns (`services/cooldown.py`; wired into economy + shop)
 
 ### In progress / next
 
@@ -362,7 +369,7 @@ In your dev guild, exercise each command. Slash commands sync to the dev guild o
 - [ ] Replace `requests` with `aiohttp` in `fin_cog`, `view_cog`, `utility`
 - [ ] Replace `print` with `structlog` everywhere
 - [ ] Item-use loop: `/use <item>` + per-item effect hooks (unblocks consumables: bread, coffee)
-- [ ] Redis-backed cooldowns + leaderboards (replaces the `@commands.cooldown` placeholders)
+- [ ] Redis-backed leaderboards (sorted-set over `transactions` totals)
 - [ ] Mini-games: blackjack, slots, dice
 - [ ] Fishing cog (consumes/uses `fishing_rod` from the catalog)
 - [ ] Lottery cog (consumes `lottery_ticket`; weekly draw)

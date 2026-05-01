@@ -12,6 +12,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from vixen.db import get_session
+from vixen.services.cooldown import try_acquire
 from vixen.services.economy import InsufficientFunds
 from vixen.services.items import ITEMS
 from vixen.services.shop import (
@@ -80,6 +81,13 @@ class ShopCog(commands.Cog):
             await ctx.reply("Quantity must be positive.", ephemeral=True)
             return
 
+        remaining = await try_acquire(ctx.author.id, "shop_buy", seconds=3)
+        if remaining > 0:
+            await ctx.reply(
+                f"Slow down — try again in {remaining:.0f}s.", ephemeral=True
+            )
+            return
+
         try:
             async with get_session() as session:
                 cost, new_balance, new_qty = await buy_item(
@@ -120,6 +128,13 @@ class ShopCog(commands.Cog):
     ) -> None:
         if qty <= 0:
             await ctx.reply("Quantity must be positive.", ephemeral=True)
+            return
+
+        remaining = await try_acquire(ctx.author.id, "shop_sell", seconds=3)
+        if remaining > 0:
+            await ctx.reply(
+                f"Slow down — try again in {remaining:.0f}s.", ephemeral=True
+            )
             return
 
         try:
