@@ -25,7 +25,7 @@ Design rules:
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import Transaction, User
-
+from . import leaderboard
 
 # --------------------------------------------------------------------------- #
 # Domain errors
@@ -113,4 +113,10 @@ async def change_cash(
             reason=reason,
         )
     )
+
+    # Keep the leaderboard ZSET in step with the DB. Soft-fails when Redis
+    # isn't initialized (alembic, plain economy tests), so callers don't
+    # have to know whether Redis is up. See services.leaderboard.sync_user.
+    await leaderboard.sync_user(session, discord_id)
+
     return new_cash
