@@ -31,6 +31,11 @@ class Item:
     price: int
     sell_price: int
     emoji: str
+    # `effect` names a handler in services.effects.EFFECTS. None means the
+    # item isn't /use-able directly — it's either pure flavor (resale only)
+    # or it's consumed by another command (lottery_ticket by /lottery,
+    # padlock by /rob defense, fishing_rod kept-and-reused by /fish).
+    effect: str | None = None
 
 
 def _sell(price: int) -> int:
@@ -46,6 +51,7 @@ _CATALOG: tuple[Item, ...] = (
         price=50,
         sell_price=_sell(50),
         emoji="🍞",
+        effect="feast",
     ),
     Item(
         key="coffee",
@@ -54,6 +60,7 @@ _CATALOG: tuple[Item, ...] = (
         price=100,
         sell_price=_sell(100),
         emoji="☕",
+        effect="caffeinate",
     ),
     Item(
         key="fishing_rod",
