@@ -1,26 +1,36 @@
-"""Redis-backed cooldown service.
+"""Redis-backed escalating cooldown service.
 
-Why Redis instead of discord.py's `@commands.cooldown`:
+The model: every (user, bucket) pair has a "burst counter". Each successful
+attempt increments it, and the cooldown applied to gate the next attempt
+grows with the count:
 
-- Discord.py's cooldowns live in process memory. Restart the bot and every
-  user's cooldown clears — they can hammer `/work`, get rate-limited, wait
-  for the bot to reload, and the cooldown is gone. Trivially gameable.
-- Redis gives us a single shared store with per-key TTL. `SET NX EX` is
-  atomic in one round-trip — no race between check and set.
-- Mini-games and leaderboards will use the same primitive, so this is the
-  shared foundation rather than a feature-specific shim.
+    Attempt #   Cooldown applied (gates the next attempt)
+    1           1 s
+    2           3 s
+    3 +         5 s   (plateau — never grows past this)
 
-Key shape:
-    cd:user:<discord_id>:<bucket>
+The counter expires after 30 s of idle. Anyone going quiet for half a
+minute starts fresh on attempt #1 with no penalty.
 
-Bucketing is per-user-per-command, not per-guild — a user hammering /work
-shouldn't be able to bypass by switching guilds. The bucket name is the
-caller's responsibility (typically the command name, e.g. "work",
-"coinflip", "shop_buy").
+Why escalate at all:
 
-Cooldown durations live in the cog, not here. This module is the mechanism;
-deciding how long /work locks for is a gameplay decision and belongs next
-to the command.
+- A real human firing /work every minute (or even every 10 s) never sees
+  more than a 1 s cooldown — feels free, no friction.
+- A script hammering as fast as possible gets clamped to 5 s gaps within
+  three attempts. Sustained spam is throttled, but the door isn't slammed
+  shut — just narrowed enough to make automated farming uneconomical.
+
+Why Redis: same reasons as a flat cooldown — survives bot restarts, single
+shared store, atomic SET/INCR/EXPIRE primitives. The bucket name is the
+caller's responsibility (typically the command name).
+
+Key shape — two keys per (user, bucket):
+
+    cd:user:<discord_id>:<bucket>:lock    short TTL = remaining cooldown
+    cd:user:<discord_id>:<bucket>:count   30s TTL = the burst counter
+
+Two keys instead of one because their TTLs serve different purposes: the
+lock TTL tells the user how long to wait, the count TTL is the idle reset.
 """
 
 from __future__ import annotations
@@ -29,43 +39,66 @@ from ..cache import redis as get_redis
 
 _KEY_PREFIX = "cd"
 
+# Sliding window for the burst counter. After this many seconds of idle,
+# the next attempt starts the curve over from #1.
+_RESET_WINDOW_SECONDS = 30
 
-def _key(user_id: int, bucket: str) -> str:
-    return f"{_KEY_PREFIX}:user:{user_id}:{bucket}"
+
+def _curve(attempt: int) -> int:
+    """Cooldown duration applied AFTER the Nth successful attempt (gates N+1)."""
+    if attempt <= 1:
+        return 1
+    if attempt == 2:
+        return 3
+    return 5
 
 
-async def try_acquire(user_id: int, bucket: str, seconds: int) -> float:
-    """Try to claim a cooldown lock for `seconds`.
+def _lock_key(user_id: int, bucket: str) -> str:
+    return f"{_KEY_PREFIX}:user:{user_id}:{bucket}:lock"
 
-    Returns 0.0 when acquired — the key is now set with TTL `seconds`,
-    and the caller is free to proceed. Subsequent calls within the window
-    will see a non-zero remaining time.
 
-    Returns the remaining cooldown in seconds (>0) when the bucket is
-    already locked. The caller should reply with a friendly message and
-    return without doing the work.
+def _count_key(user_id: int, bucket: str) -> str:
+    return f"{_KEY_PREFIX}:user:{user_id}:{bucket}:count"
 
-    Atomicity: uses Redis `SET NX EX` so the check-and-set is one round
-    trip. No race window between "is this on cooldown?" and "now claim it".
+
+async def try_acquire(user_id: int, bucket: str) -> float:
+    """Try to claim the bucket. Returns 0.0 on acquire, remaining seconds on block.
+
+    Side effects on acquire:
+    - Increments the burst counter (or creates it at 1 on first contact).
+    - Resets the counter's TTL to 30 s (any successful attempt extends the
+      idle window).
+    - Sets a fresh lock with the curve duration for the next attempt.
     """
     client = get_redis()
-    key = _key(user_id, bucket)
+    lock_key = _lock_key(user_id, bucket)
+    count_key = _count_key(user_id, bucket)
 
-    # Returns truthy on acquire, None when the key already exists.
-    # Value is irrelevant — we only care about presence and TTL.
-    acquired = await client.set(key, "1", nx=True, ex=seconds)
-    if acquired:
-        return 0.0
+    # Currently locked? TTL > 0 means an active lock; tell the caller how
+    # much longer to wait.
+    ttl = await client.ttl(lock_key)
+    if ttl > 0:
+        return float(ttl)
 
-    # Already locked. Read TTL to tell the user how long to wait.
-    ttl = await client.ttl(key)
-    # ttl == -2: key doesn't exist (expired between SET and TTL — race).
-    # ttl == -1: key exists but has no expiry (shouldn't happen with our SET).
-    # In either edge case treat as "free" so we don't lie to the user.
-    return float(max(ttl, 0))
+    # Not locked. INCR the burst counter — atomic, creates at 1 on first
+    # call, returns the new value.
+    attempt = await client.incr(count_key)
+
+    # Refresh the counter's TTL so the burst keeps "alive" as long as the
+    # user keeps attempting within the window. This is the sliding part of
+    # the sliding window.
+    await client.expire(count_key, _RESET_WINDOW_SECONDS)
+
+    # Set the lock that gates the NEXT attempt. Curve plateaus at 5 s.
+    duration = _curve(attempt)
+    await client.set(lock_key, "1", ex=duration)
+
+    return 0.0
 
 
 async def clear(user_id: int, bucket: str) -> None:
-    """Manually drop a cooldown bucket. For tests and admin reset."""
+    """Drop both lock and counter for a (user, bucket). Tests + admin reset."""
     client = get_redis()
-    await client.delete(_key(user_id, bucket))
+    await client.delete(
+        _lock_key(user_id, bucket), _count_key(user_id, bucket)
+    )
