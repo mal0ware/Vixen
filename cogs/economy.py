@@ -73,7 +73,7 @@ class EconomyCog(commands.Cog):
 
     @commands.hybrid_command(help="Earn 25–125 cash.")
     async def work(self, ctx: commands.Context) -> None:
-        remaining = await try_acquire(ctx.author.id, "work", seconds=5)
+        remaining = await try_acquire(ctx.author.id, "work")
         if remaining > 0:
             await ctx.reply(
                 f"Slow down — try again in {remaining:.0f}s.", ephemeral=True
@@ -102,7 +102,7 @@ class EconomyCog(commands.Cog):
             await ctx.reply("Wager must be a positive integer.", ephemeral=True)
             return
 
-        remaining = await try_acquire(ctx.author.id, "coinflip", seconds=5)
+        remaining = await try_acquire(ctx.author.id, "coinflip")
         if remaining > 0:
             await ctx.reply(
                 f"Slow down — try again in {remaining:.0f}s.", ephemeral=True

@@ -81,7 +81,7 @@ class ShopCog(commands.Cog):
             await ctx.reply("Quantity must be positive.", ephemeral=True)
             return
 
-        remaining = await try_acquire(ctx.author.id, "shop_buy", seconds=3)
+        remaining = await try_acquire(ctx.author.id, "shop_buy")
         if remaining > 0:
             await ctx.reply(
                 f"Slow down — try again in {remaining:.0f}s.", ephemeral=True
@@ -130,7 +130,7 @@ class ShopCog(commands.Cog):
             await ctx.reply("Quantity must be positive.", ephemeral=True)
             return
 
-        remaining = await try_acquire(ctx.author.id, "shop_sell", seconds=3)
+        remaining = await try_acquire(ctx.author.id, "shop_sell")
         if remaining > 0:
             await ctx.reply(
                 f"Slow down — try again in {remaining:.0f}s.", ephemeral=True

@@ -285,8 +285,8 @@ A thin Discord shim: parse args, call the service, format the reply. Place new c
 @app_commands.describe(arg="What this argument is for.")
 @app_commands.choices(arg=[app_commands.Choice(name="Display", value="key"), ...])  # for fixed-set inputs
 async def my_command(self, ctx: commands.Context, arg: str) -> None:
-    # Anti-spam cooldown — short and quiet; only mutating commands need it.
-    remaining = await try_acquire(ctx.author.id, "my_command", seconds=3)
+    # Anti-spam cooldown — escalating curve, applied per-user-per-bucket.
+    remaining = await try_acquire(ctx.author.id, "my_command")
     if remaining > 0:
         await ctx.reply(f"Slow down — try again in {remaining:.0f}s.", ephemeral=True)
         return
@@ -306,7 +306,7 @@ Conventions:
 - User-facing errors → `ctx.reply(..., ephemeral=True)` — only the user sees them, no spam.
 - Use `<t:UNIX:R>` in embeds for relative timestamps; Discord renders them in the viewer's locale.
 - Cog `__init__` should be cheap. No DB calls, no network. Keep heavy lifting in command handlers.
-- **Cooldowns**: use `vixen.services.cooldown.try_acquire(user_id, bucket, seconds)` for any state-mutating command. It's Redis-backed (survives bot restarts), atomic, and bucketed per-user-per-command. Aim for **3–5s** — short enough to feel free, long enough to defeat click-spam. Read-only commands (`/shop`, `/inventory`, `/profile`) don't need one; Discord's own outbound rate limit handles message flooding.
+- **Cooldowns**: use `vixen.services.cooldown.try_acquire(user_id, bucket)` for any state-mutating command. The service applies a uniform escalating curve — first attempt free, then 1 s after #1, 3 s after #2, 5 s after #3 onward. The counter resets after 30 s of idle, so casual play never hits the upper end; only sustained spam plateaus at 5 s gaps. Read-only commands (`/shop`, `/inventory`, `/profile`) don't need cooldowns; Discord's own outbound rate limit handles message flooding.
 
 End the file with:
 
