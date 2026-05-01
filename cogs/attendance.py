@@ -1,9 +1,18 @@
-import discord
 import json
 import random
 import time
-from discord.ui import View, Button, Modal, TextInput
+
+import discord
 from discord.ext import commands
+from discord.ui import Button, Modal, TextInput, View
+
+from vixen.logging import get_logger
+
+# Module-level logger. structlog is the project standard — all new and
+# migrated code logs through it so output stays parseable (JSON in prod,
+# human-readable in dev).
+log = get_logger(__name__)
+
 
 # save json file & handle races
 def save_json(filename: str, data: dict):
@@ -11,15 +20,17 @@ def save_json(filename: str, data: dict):
     delay = 1
     while unfinished and delay < 10:
         try:
-            with open(filename, 'w') as f: 
+            with open(filename, 'w') as f:
                 f.write(json.dumps(data))
             unfinished = False
-        except IOError as e:
+        except IOError:
             time.sleep(2 + 3 * random.random())
             delay += 1
-    
+
     if unfinished:
-        print(f"Failed to save at {filename}")
+        # Replaces the original `print(...)` — structured warning so it
+        # surfaces in `journalctl` / log aggregator under a known event name.
+        log.warning("attendance_save_failed", filename=filename)
 
 class UCIDModal(Modal, title="Check into your meeting!"):
 
