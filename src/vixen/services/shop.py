@@ -121,6 +121,22 @@ async def remove_item(
     return row.quantity
 
 
+async def has_item(
+    session: AsyncSession,
+    discord_id: int,
+    item_key: str,
+    qty: int = 1,
+) -> bool:
+    """Return True if the user owns at least `qty` of `item_key`.
+
+    Cheap helper used by feature cogs that gate on inventory (fishing,
+    lottery, robbery defense) without modifying it. Compared to a full
+    `list_inventory` + filter, this is one indexed lookup.
+    """
+    row = await _get_row(session, discord_id, item_key)
+    return row is not None and row.quantity >= qty
+
+
 async def list_inventory(
     session: AsyncSession,
     discord_id: int,
