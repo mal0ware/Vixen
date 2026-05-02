@@ -331,9 +331,11 @@ async def main() -> None:
         # Always run on shutdown, including KeyboardInterrupt and crashes.
         # Dispose order matters: highest-level (HTTP sessions, services)
         # first, then infrastructure (Redis, DB engine).
+        from .services.http import close_session as close_http_session
         from .services.weather import close_session as close_weather_session
 
         await close_weather_session()
+        await close_http_session()
         await dispose_redis()
         await dispose_db()
         log.info("infra_disposed")
