@@ -7,6 +7,7 @@ from .guild import Guild
 from .inventory import InventoryItem
 from .lottery import LotteryEntry
 from .reminder import Reminder
+from .snipe import SnipeScore
 from .transaction import Transaction
 from .user import User
 
@@ -16,6 +17,7 @@ __all__ = [
     "InventoryItem",
     "LotteryEntry",
     "Reminder",
+    "SnipeScore",
     "TimestampMixin",
     "Transaction",
     "User",

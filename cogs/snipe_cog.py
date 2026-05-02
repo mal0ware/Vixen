@@ -1,247 +1,251 @@
-import discord
-from discord.ui import Label, View, Button, TextInput, Modal
-from discord.ext import commands
-from discord import app_commands
-import json
-import time
-import functools
+"""/snipe_leaderboard — paginated points leaderboard.
+
+Pre-migration the cog read points from `bot.stats2` (loaded from
+`data/stats2.json` at boot). Now backed by `services.snipe` which reads
+the Postgres `snipe_scores` table — same display, no JSON file needed.
+
+The pagination view supports:
+    « / ‹       jump to first / previous page
+    [N/total]   page indicator (clickable: opens a "go to page" modal)
+    › / »       next / last page
+
+5 buttons per row, the discord.py max. Owner-locked: only the original
+invoker can flip pages, otherwise a stranger could repaginate someone
+else's leaderboard.
+"""
+
 import math
-import copy
-from typing import Union
+
+import discord
+from discord.ext import commands
+from discord.ui import Button, Modal, TextInput, View
+
+from vixen.db import get_session
+from vixen.models import SnipeScore
+from vixen.services import snipe
 
 PAGE_SIZE = 4
 
-class PageModal(Modal):
-    def __init__(self, leaderboard):
-        super().__init__(title="Enter the page to go to")
-        
-        self.leaderboard = leaderboard
-        
-    message_input = TextInput(
+
+# --------------------------------------------------------------------------- #
+# Modal — "go to page" jump
+# --------------------------------------------------------------------------- #
+
+
+class _PageModal(Modal):
+    """Lets the user type a page number directly. Validates 1..total."""
+
+    page_input = TextInput(
         label="Page",
-        placeholder="ex. 3, 67",
+        placeholder="e.g. 3, 12",
         style=discord.TextStyle.short,
         required=True,
-        max_length=3,
+        max_length=4,
     )
 
-    async def on_submit(self, interaction: discord.Interaction):
-        page = self.message_input.value.strip()
-        
-        leaderboard = self.leaderboard
-        pages = math.ceil(len(leaderboard.stats) / PAGE_SIZE)
-                
-        if not page.isdigit():
-            await interaction.response.send_message(f"Not an positive integer. Please send an integer from 1 to {pages}.", ephemeral=True)
+    def __init__(self, view: "_LeaderboardView"):
+        super().__init__(title="Go to page")
+        self._view = view
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        raw = self.page_input.value.strip()
+        if not raw.isdigit():
+            await interaction.response.send_message(
+                "Page must be a positive integer.", ephemeral=True
+            )
             return
-        
-        page = int(page)
-        
-        if page <= 0 or page > pages:
-            await interaction.response.send_message(f"Out of bounds. Please send an integer from 1 to {pages}.", ephemeral=True)
+
+        target = int(raw)
+        total_pages = max(1, math.ceil(len(self._view.scores) / PAGE_SIZE))
+        if not 1 <= target <= total_pages:
+            await interaction.response.send_message(
+                f"Out of range — pages 1 to {total_pages}.",
+                ephemeral=True,
+            )
             return
-        
-        leaderboard.page = page
-        await self.leaderboard.update_and_send(interaction)
-        
-class LeaderboardView(View):
-    def __init__(self, ctx):
+
+        self._view.page = target
+        await self._view.update_message(interaction)
+
+
+# --------------------------------------------------------------------------- #
+# Buttons
+# --------------------------------------------------------------------------- #
+
+
+class _NavButton(Button):
+    """Generic navigation button. `direction` decides the effect.
+
+    Using one class with a direction param is cleaner than the original
+    five separate Button subclasses — same behaviour, less duplication.
+    """
+
+    def __init__(
+        self,
+        *,
+        label: str,
+        emoji: str,
+        direction: str,  # 'first' | 'prev' | 'next' | 'last'
+    ):
+        super().__init__(
+            label=label, emoji=emoji, style=discord.ButtonStyle.blurple
+        )
+        self.direction = direction
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: _LeaderboardView = self.view  # type: ignore[assignment]
+        total_pages = max(1, math.ceil(len(view.scores) / PAGE_SIZE))
+
+        if self.direction == "first":
+            view.page = 1
+        elif self.direction == "prev":
+            view.page = max(1, view.page - 1)
+        elif self.direction == "next":
+            view.page = min(total_pages, view.page + 1)
+        elif self.direction == "last":
+            view.page = total_pages
+
+        await view.update_message(interaction)
+
+
+class _GotoButton(Button):
+    """The center page-indicator button. Click → opens a Modal to jump."""
+
+    def __init__(self, label: str):
+        super().__init__(label=label, emoji="⏺️", style=discord.ButtonStyle.blurple)
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: _LeaderboardView = self.view  # type: ignore[assignment]
+        await interaction.response.send_modal(_PageModal(view))
+
+
+# --------------------------------------------------------------------------- #
+# View
+# --------------------------------------------------------------------------- #
+
+
+class _LeaderboardView(View):
+    """Paginated leaderboard. Builds 5 buttons; owner-locked."""
+
+    def __init__(self, ctx: commands.Context, scores: list[SnipeScore]):
         super().__init__(timeout=180)
         self.ctx = ctx
-        self.stats = self.gen_stats() 
+        self.scores = scores
         self.page = 1
-        
-        self.bb = self.bb_button(self.stats)
-        self.add_item(self.bb)
-        
-        self.b = self.b_button(self.stats)
-        self.add_item(self.b)
-        
-        self.goto = self.goto_button(self.stats)
-        self.add_item(self.goto)
-        
-        self.f = self.f_button(self.stats)
-        self.add_item(self.f)
-        
-        self.ff = self.ff_button(self.stats)
-        self.add_item(self.ff)
-        
-    def gen_stats(self):
-        data = copy.deepcopy(self.ctx.bot.stats2)
-        stats = []
-        
-        for user_id, details in data.items():
-            details['user_id'] = user_id 
-            stats.append(details)
 
-        stats = sorted(
-            stats, 
-            key=lambda item: int(item["overall points"]), 
-            reverse=True
-        )
-        
-        return stats
-        
-    async def interaction_check(self, interaction: discord.Interaction):
-        if not interaction.user.id == self.ctx.author.id:
-            await interaction.response.send_message(
-                f'Not your interaction! Open your own one using the leaderboard command!',
-                ephemeral=True
+        # Five buttons in the order they should appear in Discord.
+        self.first = _NavButton(label="First", emoji="⏪", direction="first")
+        self.prev = _NavButton(label="Prev", emoji="◀️", direction="prev")
+        self.goto = _GotoButton(label=self._page_label())
+        self.next = _NavButton(label="Next", emoji="▶️", direction="next")
+        self.last = _NavButton(label="Last", emoji="⏩", direction="last")
+
+        for btn in (self.first, self.prev, self.goto, self.next, self.last):
+            self.add_item(btn)
+
+        self._refresh_button_state()
+
+    def _page_label(self) -> str:
+        total_pages = max(1, math.ceil(len(self.scores) / PAGE_SIZE))
+        return f"{self.page}/{total_pages}"
+
+    def _refresh_button_state(self) -> None:
+        """Disable nav buttons that don't apply at the current edge."""
+        total_pages = max(1, math.ceil(len(self.scores) / PAGE_SIZE))
+
+        at_first = self.page == 1
+        at_last = self.page == total_pages
+
+        self.first.disabled = at_first
+        self.prev.disabled = at_first
+        self.next.disabled = at_last
+        self.last.disabled = at_last
+
+        # Edge buttons go red when disabled to match the original styling.
+        for btn, disabled in (
+            (self.first, at_first),
+            (self.prev, at_first),
+            (self.next, at_last),
+            (self.last, at_last),
+        ):
+            btn.style = (
+                discord.ButtonStyle.red if disabled else discord.ButtonStyle.blurple
             )
 
-            return False
-        
-        return True
-        
-    class bb_button(discord.ui.Button):
-        def __init__(self, stats):
-            super().__init__(label="To first page", style=discord.ButtonStyle.red, emoji="⏪", disabled=True)
-            self.stats = stats
-        
-        async def callback(self, interaction: discord.Interaction):
-            self.view.page = 1
-            await self.view.update_and_send(interaction)
-            
-        def update(self):
-            if self.view.page == 1:
-                self.disabled = True
-                self.style = discord.ButtonStyle.red
-            else:
-                self.disabled = False
-                self.style = discord.ButtonStyle.blurple
+        self.goto.label = self._page_label()
 
-    class b_button(discord.ui.Button):
-        def __init__(self, stats):
-            super().__init__(label="Previous Page", style=discord.ButtonStyle.red, emoji="◀️", disabled=True)
-            self.stats = stats
-            
-        async def callback(self, interaction: discord.Interaction):
-            self.view.page -= 1 
-            await self.view.update_and_send(interaction)
-            
-        def update(self):
-            if self.view.page == 1:
-                self.disabled = True
-                self.style = discord.ButtonStyle.red
-            else:
-                self.disabled = False
-                self.style = discord.ButtonStyle.blurple
-        
-    class goto_button(discord.ui.Button):
-        def __init__(self, stats):
-            pages = math.ceil(len(stats) / PAGE_SIZE)
-            
-            super().__init__(label=f"1/{pages}", style=discord.ButtonStyle.blurple, emoji="⏺️")
-            self.stats = stats
-            
-        async def callback(self, interaction: discord.Interaction):
-            await interaction.response.send_modal(PageModal(self.view))
-            
-        def update(self):
-            pages = math.ceil(len(self.view.stats) / PAGE_SIZE)
-        
-            self.label = f"{self.view.page}/{pages}"
-            
-    class f_button(discord.ui.Button):
-        def __init__(self, stats):
-            pages = math.ceil(len(stats) / PAGE_SIZE)
-            
-            super().__init__(label="Next Page", style=discord.ButtonStyle.blurple, emoji="▶️")
-            self.stats = stats
-            
-            if pages == 1:
-                self.disabled = True
-                self.style = discord.ButtonStyle.red
-            
-        async def callback(self, interaction: discord.Interaction):
-            self.view.page += 1
-            await self.view.update_and_send(interaction)
-            
-        def update(self):
-            pages = math.ceil(len(self.view.stats) / PAGE_SIZE)
-        
-            if self.view.page == pages:
-                self.disabled = True
-                self.style = discord.ButtonStyle.red
-            else:
-                self.disabled = False
-                self.style = discord.ButtonStyle.blurple
-        
-    class ff_button(discord.ui.Button):
-        def __init__(self, stats):
-            pages = math.ceil(len(stats) / PAGE_SIZE)
-            
-            super().__init__(label="Last Page", style=discord.ButtonStyle.blurple, emoji="⏩")
-            self.stats = stats
-            
-            if pages == 1:
-                self.disabled = True
-                self.style = discord.ButtonStyle.red
-            
-        async def callback(self, interaction: discord.Interaction):
-            pages = math.ceil(len(self.stats) / PAGE_SIZE)
-            self.view.page = pages
-            await self.view.update_and_send(interaction)
-            
-        def update(self):
-            pages = math.ceil(len(self.view.stats) / PAGE_SIZE)
-        
-            if self.view.page == pages:
-                self.disabled = True
-                self.style = discord.ButtonStyle.red
-            else:
-                self.disabled = False
-                self.style = discord.ButtonStyle.blurple
-                
-    def generate_embed(self):
-        embed = discord.Embed()
-        
-        embed.set_author(name=self.ctx.author.display_name,
-                    icon_url=self.ctx.author.display_avatar.url)
+    async def interaction_check(
+        self, interaction: discord.Interaction
+    ) -> bool:
+        if interaction.user.id != self.ctx.author.id:
+            await interaction.response.send_message(
+                "Run your own `/snipe_leaderboard` to scroll the board.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def update_message(self, interaction: discord.Interaction) -> None:
+        """Refresh button state, rebuild the embed, edit the message."""
+        self._refresh_button_state()
+        await interaction.response.edit_message(
+            embed=self.generate_embed(), view=self
+        )
+
+    def generate_embed(self) -> discord.Embed:
+        embed = discord.Embed(
+            title="Snipe Leaderboard",
+            color=discord.Color.dark_purple(),
+        )
+        embed.set_author(
+            name=self.ctx.author.display_name,
+            icon_url=self.ctx.author.display_avatar.url,
+        )
+
+        if not self.scores:
+            embed.description = "_No scores yet._"
+            return embed
 
         start = PAGE_SIZE * (self.page - 1)
-        end = min(PAGE_SIZE * (self.page), len(self.stats))
+        end = min(PAGE_SIZE * self.page, len(self.scores))
 
         for i in range(start, end):
-            embed.add_field(name=f"#{i + 1} {self.stats[i]["name"]}",
-                            value=f"Points: {self.stats[i]["overall points"]}",
-                            inline=False)
+            score = self.scores[i]
+            embed.add_field(
+                name=f"#{i + 1} {score.name}",
+                value=f"Points: **{score.points:,}**",
+                inline=False,
+            )
         return embed
-        
-    # the union with message is legacy
-    # leaving it as is tho
-    async def update_and_send(self, context: Union[discord.Interaction, discord.Message]):
-        for button in self.children:
-            button.update()
-            
-        embed = self.generate_embed()
 
-        if isinstance(context, discord.Interaction):
-            await context.response.edit_message(embed=embed, view=self)
-        elif isinstance(context, discord.Message):
-            await context.edit(embed=embed, view=self)
-            
-    async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-            item.style = discord.ButtonStyle.gray
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except discord.NotFound:
-                pass
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True  # type: ignore[attr-defined]
+            child.style = discord.ButtonStyle.gray  # type: ignore[attr-defined]
+
+
+# --------------------------------------------------------------------------- #
+# Cog
+# --------------------------------------------------------------------------- #
+
 
 class SnipeCog(commands.Cog):
+    """Snipe-game points leaderboard."""
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        
-    # Renamed from /leaderboard to /snipe_leaderboard to free the bare
-    # /leaderboard name for the new wealth leaderboard cog. The handler
-    # logic is unchanged.
-    @commands.hybrid_command(name="snipe_leaderboard", help="Send the snipe leaderboard")
-    async def snipe_leaderboard(self, ctx: commands.Context):
-        view = LeaderboardView(ctx)
-        view.message = await ctx.reply(embed=view.generate_embed(), view=view, ephemeral=True)
 
-async def setup(bot: commands.Bot):
+    @commands.hybrid_command(
+        name="snipe_leaderboard",
+        help="Show the snipe-game leaderboard.",
+    )
+    async def snipe_leaderboard(self, ctx: commands.Context) -> None:
+        async with get_session() as session:
+            scores = await snipe.all_scores(session)
+
+        view = _LeaderboardView(ctx, scores)
+        await ctx.reply(embed=view.generate_embed(), view=view, ephemeral=True)
+
+
+async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(SnipeCog(bot))
