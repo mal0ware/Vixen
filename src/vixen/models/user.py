@@ -10,7 +10,7 @@ primary key (no surrogate `id` column), so foreign keys from other tables
 are also Discord IDs. Easier to grep, no extra join.
 """
 
-from sqlalchemy import BigInteger, Integer
+from sqlalchemy import BigInteger, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin
@@ -27,6 +27,12 @@ class User(Base, TimestampMixin):
     # /withdraw friction step so single bad clicks don't wipe everything.
     cash: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     bank: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # Optional per-user identifier set during attendance check-in.
+    # Originally a "UCID" (university computing ID) for student SIG
+    # meetings — kept generic so a different deployment could reuse the
+    # field for any free-form personal id. NULL = user hasn't registered.
+    ucid: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     inventory_items: Mapped[list["InventoryItem"]] = relationship(  # noqa: F821
         back_populates="user", cascade="all, delete-orphan"
