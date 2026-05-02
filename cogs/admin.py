@@ -1,138 +1,168 @@
-import json
+"""Admin / owner utilities.
+
+Migrated to the new shape:
+- Dropped `change_prefix`. Per-guild prefix lives in Postgres + Redis now;
+  the prefix admin lives in `cogs/prefix.py` as `/setprefix`. Keeping the
+  duplicate here would let two users with different permissions write
+  different things.
+- Dropped the `prefixes.json` read on init. The file is no longer the
+  source of truth.
+- `/sync` consolidated into a single hybrid command, owner-only.
+- Added `/reload-cog` for hot-reloading a cog during development.
+
+Every command in here is owner-only — these are footguns (a wrong sync
+in prod can wipe a guild's slash commands until propagation completes).
+"""
+
 import discord
-from discord.ext import commands
 from discord import app_commands
+from discord.ext import commands
 
-PREFIX_FILE = "prefixes.json"
+from vixen.logging import get_logger
 
-
-def load_prefixes() -> dict:
-    """
-    Load prefix mappings from disk.
-
-    File format example:
-    {
-        "123456789012345678": "!",
-        "987654321098765432": "?"
-    }
-    """
-    try:
-        with open(PREFIX_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        # If file is missing / invalid, return empty mapping.
-        return {}
+log = get_logger(__name__)
 
 
-def save_prefixes(prefixes: dict) -> None:
-    """Persist prefix mappings back to disk."""
-    with open(PREFIX_FILE, "w", encoding="utf-8") as f:
-        json.dump(prefixes, f, ensure_ascii=False, indent=2)
-
-
-class Admin(commands.Cog):
-    """
-    Admin utilities:
-
-    - /change_prefix or !change_prefix : change the bot prefix per-server.
-    - !sync                            : owner-only text command to resync slash commands.
-    - /sync                            : owner-only slash command to resync slash commands.
-    """
+class AdminCog(commands.Cog):
+    """Owner-only utilities — not for general use."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.prefixes = load_prefixes()
 
-    # ------------------------------------------------------------------ #
-    # Prefix management
-    # ------------------------------------------------------------------ #
+    # ---------------------------------------------------------------- #
+    # Owner check helper
+    # ---------------------------------------------------------------- #
 
-    @commands.hybrid_command(help="Change the bot prefix for this server.")
-    @commands.has_permissions(manage_guild=True)
-    @app_commands.describe(prefix="Requested prefix")
-    async def change_prefix(self, ctx: commands.Context, prefix: str):
+    async def _is_owner(self, user_id: int) -> bool:
+        """Resolve owner_id lazily; cache after first lookup.
+
+        `bot.owner_id` is None until application_info() runs; this lets
+        owner-checks work whether or not the bot has been "bootstrapped"
+        with the application info already.
         """
-        Hybrid command to change the prefix for the current guild.
+        if self.bot.owner_id is None:
+            info = await self.bot.application_info()
+            self.bot.owner_id = info.owner.id
+        return user_id == self.bot.owner_id
 
-        - Requires 'Manage Server' (manage_guild) permissions.
-        - Updates prefixes.json and the in-memory mapping.
-        """
-        if ctx.guild is None:
-            await ctx.reply("This command must be used in a server, not in DMs.")
-            return
+    # ---------------------------------------------------------------- #
+    # /sync
+    # ---------------------------------------------------------------- #
 
-        self.prefixes[str(ctx.guild.id)] = prefix
-        save_prefixes(self.prefixes)
-        await ctx.reply(f"Prefix updated to `{prefix}`.")
-
-    # ------------------------------------------------------------------ #
-    # Owner-only sync commands
-    # ------------------------------------------------------------------ #
-
-    @commands.command(name="sync", help="Owner-only: resync slash commands for this guild.")
-    @commands.is_owner()
-    async def sync_prefix(self, ctx: commands.Context):
-        """
-        Text command: !sync
-
-        - Only the bot owner can use this.
-        - Resyncs app commands for the current guild only.
-        """
-        if ctx.guild is None:
-            await ctx.send("This command must be used in a server, not in DMs.")
-            return
-
-        synced = await self.bot.tree.sync(guild=ctx.guild)
-        await ctx.send(f"Synced {len(synced)} commands to this guild.")
-
-    @app_commands.command(
+    @commands.hybrid_command(
         name="sync",
-        description="Owner-only: resync slash commands for this guild."
+        help="(Owner) Resync slash commands.",
     )
-    async def sync_slash(self, interaction: discord.Interaction):
-        """
-        Slash command: /sync
-
-        - Only the bot owner can use this.
-        - Resyncs app commands for the current guild only.
-        """
-        # Get owner id; if not set, fetch from application info once.
-        owner_id = self.bot.owner_id
-        if owner_id is None:
-            app_info = await self.bot.application_info()
-            owner_id = app_info.owner.id
-
-        if interaction.user.id != owner_id:
-            await interaction.response.send_message(
-                "You are not the bot owner.",
-                ephemeral=True,
-            )
-            return
-
-        if interaction.guild is None:
-            await interaction.response.send_message(
-                "This command must be used in a server.",
-                ephemeral=True,
-            )
-            return
-
-        #synced = await self.bot.tree.sync(guild=interaction.guild)
-        synced = await self.bot.tree.sync()
-
-        await interaction.response.send_message(
-            f"Synced {len(synced)} commands to this guild.",
-            ephemeral=True,
-        )
-        
-        
-    @commands.command(name="debug_commands")
+    @app_commands.describe(
+        scope="Where to sync: 'guild' (this server) or 'global' (slow).",
+    )
     @commands.is_owner()
-    async def debug_commands(self, ctx: commands.Context):
-        cmds = self.bot.tree.get_commands()
-        names = [c.name for c in cmds]
-        await ctx.send(f"App commands I know about: {names}")
+    async def sync(
+        self,
+        ctx: commands.Context,
+        scope: str = "guild",
+    ) -> None:
+        """Resync slash commands. Defaults to the current guild — use
+        scope='global' for a global sync (hours of propagation).
+        """
+        if scope not in {"guild", "global"}:
+            await ctx.reply("Scope must be 'guild' or 'global'.", ephemeral=True)
+            return
+
+        if scope == "guild":
+            if ctx.guild is None:
+                await ctx.reply(
+                    "Use scope='global' from DMs.", ephemeral=True
+                )
+                return
+            synced = await self.bot.tree.sync(guild=ctx.guild)
+            log.info("sync_done", scope="guild", guild_id=ctx.guild.id, count=len(synced))
+            await ctx.reply(
+                f"Synced **{len(synced)}** commands to this guild.",
+                ephemeral=True,
+            )
+        else:  # global
+            synced = await self.bot.tree.sync()
+            log.info("sync_done", scope="global", count=len(synced))
+            await ctx.reply(
+                f"Synced **{len(synced)}** commands globally. "
+                "Propagation can take up to an hour.",
+                ephemeral=True,
+            )
+
+    # ---------------------------------------------------------------- #
+    # /reload-cog
+    # ---------------------------------------------------------------- #
+
+    @commands.hybrid_command(
+        name="reload-cog",
+        help="(Owner) Hot-reload a cog by name (e.g. shop, fin_cog).",
+    )
+    @app_commands.describe(
+        cog_name="Name of the cog file under cogs/ (no .py extension).",
+    )
+    @commands.is_owner()
+    async def reload_cog(
+        self,
+        ctx: commands.Context,
+        cog_name: str,
+    ) -> None:
+        """Reload one cog's extension without restarting the bot.
+
+        Useful during development — edit a cog, /reload-cog <name>, see
+        the change immediately. Slash command schema changes still need
+        a /sync afterwards.
+        """
+        ext = f"cogs.{cog_name}"
+        try:
+            await self.bot.reload_extension(ext)
+        except commands.ExtensionNotLoaded:
+            # Try loading fresh; maybe it never loaded due to a startup
+            # error. This makes the command useful for "I just fixed the
+            # bug, please load me now" too.
+            try:
+                await self.bot.load_extension(ext)
+            except Exception as e:
+                log.exception("reload_cog_failed", extension=ext)
+                await ctx.reply(
+                    f"Couldn't load `{cog_name}`: `{type(e).__name__}`",
+                    ephemeral=True,
+                )
+                return
+        except Exception as e:
+            log.exception("reload_cog_failed", extension=ext)
+            await ctx.reply(
+                f"Reload of `{cog_name}` failed: `{type(e).__name__}: {e}`",
+                ephemeral=True,
+            )
+            return
+
+        log.info("reload_cog_ok", extension=ext)
+        await ctx.reply(f"Reloaded `{cog_name}`.", ephemeral=True)
+
+    # ---------------------------------------------------------------- #
+    # /debug-commands
+    # ---------------------------------------------------------------- #
+
+    @commands.hybrid_command(
+        name="debug-commands",
+        help="(Owner) List all registered application commands.",
+    )
+    @commands.is_owner()
+    async def debug_commands(self, ctx: commands.Context) -> None:
+        """Print every name in the bot's slash-command tree.
+
+        Sanity check for "did my new cog actually register?" without
+        needing to run a sync first.
+        """
+        names = sorted(c.name for c in self.bot.tree.get_commands())
+        embed = discord.Embed(
+            title=f"Registered commands ({len(names)})",
+            description=", ".join(f"`{n}`" for n in names) or "_(none)_",
+            color=discord.Color.dark_grey(),
+        )
+        await ctx.reply(embed=embed, ephemeral=True)
 
 
-async def setup(bot: commands.Bot):
-    """Standard async setup function used by discord.py to load this cog."""
-    await bot.add_cog(Admin(bot))
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(AdminCog(bot))
