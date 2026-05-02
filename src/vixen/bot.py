@@ -329,6 +329,11 @@ async def main() -> None:
             await bot.start(settings.discord_token)
     finally:
         # Always run on shutdown, including KeyboardInterrupt and crashes.
+        # Dispose order matters: highest-level (HTTP sessions, services)
+        # first, then infrastructure (Redis, DB engine).
+        from .services.weather import close_session as close_weather_session
+
+        await close_weather_session()
         await dispose_redis()
         await dispose_db()
         log.info("infra_disposed")
