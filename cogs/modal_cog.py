@@ -1,61 +1,93 @@
-import discord
-from discord.ui import View, Button, Modal, TextInput
-from discord.ext import commands
+"""/modal — interactive demo cog.
 
-class MessageModal(Modal, title="Send a Message to Yourself"):
+Two buttons under the message:
+    "Say Hello"   ephemeral hello reply
+    "Send me a DM"   opens a modal; the bot DMs whatever the user types
+
+This cog is mostly a discord.py UI demo — the patterns here (View, Modal,
+TextInput, ephemeral responses) get reused in the real interactive
+features (e.g. /chart's timeframe buttons).
+"""
+
+import discord
+from discord.ext import commands
+from discord.ui import Button, Modal, TextInput, View
+
+from vixen.logging import get_logger
+
+log = get_logger(__name__)
+
+
+class _MessageModal(Modal, title="Send a message to yourself"):
+    """Modal that DMs the submitter whatever text they entered."""
+
     message_input = TextInput(
-        label="Your Message",
-        placeholder="Type what you want me to send back to you in a DM...",
+        label="Your message",
+        placeholder="Type what you want me to DM you...",
         style=discord.TextStyle.paragraph,
         required=True,
         max_length=1000,
     )
 
-    async def on_submit(self, interaction: discord.Interaction):
-        user_message = self.message_input.value
-        image_path = "xiao.jpg"
-        file = discord.File(image_path, filename=image_path)
+    async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
-            await interaction.user.send(
-                #f"Echoing:\n\n> {user_message}"
-                f"{user_message}", file=file
-            )
+            await interaction.user.send(self.message_input.value)
             await interaction.response.send_message(
-                "Sent DM", ephemeral=True
+                "Sent — check your DMs.", ephemeral=True
             )
         except discord.Forbidden:
+            # The user has DMs from server members closed. Tell them
+            # politely; we can't DM them and also can't mass-spam the
+            # channel.
             await interaction.response.send_message(
-                "DM unsent due to user settings", ephemeral=True
+                "I can't DM you — open up DMs from server members in your "
+                "Discord settings, then try again.",
+                ephemeral=True,
+            )
+        except Exception:
+            # Anything else (network blip, malformed payload). Log with
+            # full traceback for debugging; keep the user response generic
+            # so we don't leak internals.
+            log.exception("modal_dm_failed", user_id=interaction.user.id)
+            await interaction.response.send_message(
+                "Something went wrong sending that DM.", ephemeral=True
             )
 
-#Each button is a discord.ui.button()
-class InteractiveView(View):
-    def __init__(self, *, timeout=180):
+
+class _DemoView(View):
+    """Two-button demo view — short timeout so stale messages don't pile up."""
+
+    def __init__(self, *, timeout: float = 180):
         super().__init__(timeout=timeout)
 
     @discord.ui.button(label="Say Hello", style=discord.ButtonStyle.success, emoji="👋")
-    async def hello_button(self, interaction: discord.Interaction, button: Button):
+    async def hello(
+        self, interaction: discord.Interaction, _button: Button
+    ) -> None:
         await interaction.response.send_message(
             f"Hello, {interaction.user.mention}!", ephemeral=True
         )
 
     @discord.ui.button(label="Send me a DM", style=discord.ButtonStyle.secondary, emoji="✉️")
-    async def open_modal_button(self, interaction: discord.Interaction, button: Button):
-        await interaction.response.send_modal(MessageModal())
+    async def open_modal(
+        self, interaction: discord.Interaction, _button: Button
+    ) -> None:
+        await interaction.response.send_modal(_MessageModal())
 
-# --- Define the Cog ---
+
 class ModalCog(commands.Cog):
+    """Interactive demo: buttons + modal + ephemeral DMs."""
+
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @commands.hybrid_command(name="modal", description="Modal menu")
-    async def menu(self, ctx: commands.Context):
-        """Sends a message with a View that includes a button to open a modal."""
-        view = InteractiveView()
+    @commands.hybrid_command(name="modal", help="Open the interactive demo menu.")
+    async def menu(self, ctx: commands.Context) -> None:
         await ctx.send(
-            "This is an interactive menu. Try sending yourself a DM!",
-            view=view
+            "Click a button to interact:",
+            view=_DemoView(),
         )
 
-async def setup(bot: commands.Bot):
+
+async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(ModalCog(bot))
