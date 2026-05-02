@@ -78,28 +78,38 @@ vixen/
 │       ├── prefix.py          # per-guild prefix with Redis cache
 │       ├── finance.py         # async yfinance + RSI / MAs / MACD / Bollinger
 │       ├── charts.py          # dark-themed render functions returning bytes
-│       └── weather.py         # Open-Meteo geocode + forecast (no API key)
+│       ├── weather.py         # Open-Meteo geocode + forecast (no API key)
+│       └── http.py            # shared aiohttp ClientSession for outbound HTTP
 ├── tests/
 │   ├── conftest.py            # per-test Postgres DB + Redis db=1 fixtures
 │   └── services/              # service-layer tests (real DB + Redis, no mocks)
 │
-├── cogs/                      # ACTIVE LOAD PATH — both new- and old-shape cogs live here
-│   ├── economy.py             # NEW SHAPE — /profile, /work, /coinflip
-│   ├── shop.py                # NEW SHAPE — /shop, /buy, /sell, /inventory
-│   ├── use.py                 # NEW SHAPE — /use consumables
-│   ├── leaderboard.py         # NEW SHAPE — /leaderboard top / rank
-│   ├── games.py               # NEW SHAPE — /dice, /slots
-│   ├── fishing.py             # NEW SHAPE — /fish
-│   ├── lottery.py             # NEW SHAPE — /lottery enter/pool/draw
-│   ├── robbery.py             # NEW SHAPE — /rob
-│   ├── reminders.py           # NEW SHAPE — /remind set/list/cancel + polling
-│   ├── prefix.py              # NEW SHAPE — /setprefix admin command
-│   ├── fin_cog.py             # NEW SHAPE — /chart (interactive), /candles, /rsi,
-│   │                          #             /moving_average, /compare
-│   ├── weather.py             # NEW SHAPE — /weather, /forecast
-│   ├── help_cog.py            # NEW SHAPE — category-grouped /help
-│   └── (others)               # OLD SHAPE — admin, attendance, avatar, doge,
-│                              #  modal, moderation, snipe, utility, view
+├── cogs/                      # ACTIVE LOAD PATH — almost entirely new-shape now
+│   ├── economy.py             # /profile, /work, /coinflip
+│   ├── shop.py                # /shop, /buy, /sell, /inventory
+│   ├── use.py                 # /use consumables
+│   ├── leaderboard.py         # /leaderboard top / rank
+│   ├── games.py               # /dice, /slots
+│   ├── fishing.py             # /fish
+│   ├── lottery.py             # /lottery enter/pool/draw
+│   ├── robbery.py             # /rob
+│   ├── reminders.py           # /remind set/list/cancel + 30s polling task
+│   ├── prefix.py              # /setprefix
+│   ├── fin_cog.py             # /chart (interactive), /candles, /rsi,
+│   │                          #  /moving_average, /compare
+│   ├── weather.py             # /weather, /forecast
+│   ├── help_cog.py            # category-grouped /help
+│   ├── admin.py               # /sync, /reload-cog, /debug-commands (owner only)
+│   ├── moderation.py          # /ban, /unban, /kick + audit log
+│   ├── view_cog.py            # /rps (with optional cash wager)
+│   ├── modal_cog.py           # /modal demo (View + Modal patterns)
+│   ├── avatar_cog.py          # /avatar
+│   ├── utility.py             # /dog, /echo
+│   ├── doge_cog.py            # /doge — DOGE.gov savings boxplot
+│   ├── attendance.py          # OLD SHAPE — meeting check-ins via modal
+│   │                          #  (still backed by data/stats2.json + bot.data)
+│   └── snipe_cog.py           # OLD SHAPE — /snipe_leaderboard pagination
+│                              #  (still reads bot.stats2)
 ├── data/                      # LEGACY — JSON state files; deleted as each cog migrates
 ├── main.py                    # LEGACY — old bot entrypoint, superseded by src/vixen/bot.py
 ├── prefixes.json              # LEGACY — no longer read; replaced by Guild + Redis prefix service
@@ -403,16 +413,23 @@ In your dev guild, exercise each command. Slash commands sync to the dev guild o
 - [x] Weather cog (`/weather`, `/forecast`) backed by Open-Meteo (no API key)
 - [x] Migrate `help_cog` to new shape with explicit category grouping
 - [x] Delete orphaned `data/rpg.json` (economy fully migrated)
+- [x] Migrate `avatar_cog` (was broken — function wasn't decorated as a command)
+- [x] Migrate `modal_cog` (drop missing `xiao.jpg`, structlog)
+- [x] Migrate `utility` — `/dog` + `/echo` over shared aiohttp session in `services/http.py`
+- [x] Migrate `doge_cog` — Agg backend + in-memory PNG, fix `timeout=0` bug, defensive parse
+- [x] Migrate `admin` — drop duplicate `change_prefix`, modernize `/sync` (guild/global), add `/reload-cog`, `/debug-commands`
+- [x] Migrate `moderation` — typed Discord errors, structlog audit, result embeds
+- [x] Migrate `view_cog` — drop `/menu` demo, improve `/rps` with optional cash wager via `change_cash`
 
 ### Deferred (and why)
 
 These items aren't blocked technically, but each needs a decision or substantial work that didn't make sense in the same push:
 
-- [ ] **Replace `requests` with `aiohttp` in `view_cog`, `utility`** — needs reading what each call is actually for; skipped to avoid breaking legacy paths blindly.
 - [ ] **Tests with `dpytest`** — Discord-side interaction tests. Substantial harness setup; 140 service-layer tests already cover the business logic. Worth doing once the cog surface stabilizes.
-- [ ] **Migrate remaining legacy cogs** — `admin`, `attendance`, `avatar_cog`, `doge_cog`, `modal_cog`, `moderation`, `snipe_cog`, `utility`, `view_cog`. Each needs reading + understanding before it can be ported. They run today in their old shape; do these incrementally as you touch them for any other reason.
-- [ ] **Delete `data/stats2.json`** — still read by `cogs/attendance.py`. Delete after attendance migrates.
-- [ ] **Delete `main.py`** (legacy entrypoint) — superseded by `src/vixen/bot.py` and references obsolete files. Safe to delete once you've confirmed no scripts or docs depend on it.
+- [ ] **Migrate `attendance`** — currently reads `data.json` and `data/stats2.json` for UCID + points data. Full migration needs new `Attendance` / `Meeting` models + a migration. The existing JSON path works; structlog'd already.
+- [ ] **Migrate `snipe_cog`** — paginated leaderboard backed by `bot.stats2` (= `data/stats2.json`). Same blocker as attendance. The slash command works.
+- [ ] **Delete `data/stats2.json`** — depends on the two above.
+- [ ] **Delete `main.py`** (legacy entrypoint) — superseded by `src/vixen/bot.py`. References obsolete JSON files; would crash if run. Safe to delete once you've confirmed no scripts or docs depend on it.
 - [ ] **Production deploy notes (systemd unit, log shipping)** — needs hosting decisions (Render? Fly.io? VPS?).
 
 ### Maybe
