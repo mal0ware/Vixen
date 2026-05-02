@@ -75,7 +75,10 @@ vixen/
 │       ├── lottery.py         # /lottery enter/pool/draw mechanics
 │       ├── robbery.py         # /rob outcomes (blocked/failed/succeeded)
 │       ├── reminders.py       # /remind create/list/cancel + due polling
-│       └── prefix.py          # per-guild prefix with Redis cache
+│       ├── prefix.py          # per-guild prefix with Redis cache
+│       ├── finance.py         # async yfinance + RSI / MAs / MACD / Bollinger
+│       ├── charts.py          # dark-themed render functions returning bytes
+│       └── weather.py         # Open-Meteo geocode + forecast (no API key)
 ├── tests/
 │   ├── conftest.py            # per-test Postgres DB + Redis db=1 fixtures
 │   └── services/              # service-layer tests (real DB + Redis, no mocks)
@@ -84,15 +87,19 @@ vixen/
 │   ├── economy.py             # NEW SHAPE — /profile, /work, /coinflip
 │   ├── shop.py                # NEW SHAPE — /shop, /buy, /sell, /inventory
 │   ├── use.py                 # NEW SHAPE — /use consumables
-│   ├── leaderboard.py         # NEW SHAPE — /leaderboard top, /leaderboard rank
+│   ├── leaderboard.py         # NEW SHAPE — /leaderboard top / rank
 │   ├── games.py               # NEW SHAPE — /dice, /slots
 │   ├── fishing.py             # NEW SHAPE — /fish
 │   ├── lottery.py             # NEW SHAPE — /lottery enter/pool/draw
 │   ├── robbery.py             # NEW SHAPE — /rob
 │   ├── reminders.py           # NEW SHAPE — /remind set/list/cancel + polling
 │   ├── prefix.py              # NEW SHAPE — /setprefix admin command
+│   ├── fin_cog.py             # NEW SHAPE — /chart (interactive), /candles, /rsi,
+│   │                          #             /moving_average, /compare
+│   ├── weather.py             # NEW SHAPE — /weather, /forecast
+│   ├── help_cog.py            # NEW SHAPE — category-grouped /help
 │   └── (others)               # OLD SHAPE — admin, attendance, avatar, doge,
-│                              #  fin, help, modal, moderation, snipe, utility, view
+│                              #  modal, moderation, snipe, utility, view
 ├── data/                      # LEGACY — JSON state files; deleted as each cog migrates
 ├── main.py                    # LEGACY — old bot entrypoint, superseded by src/vixen/bot.py
 ├── prefixes.json              # LEGACY — no longer read; replaced by Guild + Redis prefix service
@@ -391,19 +398,21 @@ In your dev guild, exercise each command. Slash commands sync to the dev guild o
 - [x] Robbery cog (`/rob` with 50/50 odds, padlock defense, 10% failure penalty)
 - [x] Reminders cog (`/remind set/list/cancel`) with new `reminders` table and 30-second background poller
 - [x] Migrate prefix lookup → `Guild` row + Redis cache (`services/prefix.py`); `/setprefix` admin command
+- [x] Migrate `fin_cog` → thin cog over `services/finance` + `services/charts`. Async yfinance via `asyncio.to_thread`, dark theme, 150 DPI, in-memory PNGs, no Python.app window
+- [x] `/chart` with interactive timeframe buttons, `/candles`, MACD, Bollinger Bands, `/compare`
+- [x] Weather cog (`/weather`, `/forecast`) backed by Open-Meteo (no API key)
+- [x] Migrate `help_cog` to new shape with explicit category grouping
+- [x] Delete orphaned `data/rpg.json` (economy fully migrated)
 
 ### Deferred (and why)
 
 These items aren't blocked technically, but each needs a decision or substantial work that didn't make sense in the same push:
 
-- [ ] **Replace `requests` with `aiohttp` in `fin_cog`** — `yfinance` is a synchronous library, so the right fix is `asyncio.to_thread(...)` to run yfinance off the event loop, NOT a one-line aiohttp swap. Hold until the fin_cog rewrite.
 - [ ] **Replace `requests` with `aiohttp` in `view_cog`, `utility`** — needs reading what each call is actually for; skipped to avoid breaking legacy paths blindly.
-- [ ] **Weather cog** — needs an API choice (Open-Meteo for free / no-key, OpenWeatherMap for richer data) and config. User decision.
-- [ ] **Tests with `dpytest`** — Discord-side interaction tests. Substantial harness setup; service-layer tests already cover the business logic. Worth doing once the cog surface stabilizes.
-- [ ] **Migrate remaining legacy cogs** — `admin`, `attendance`, `avatar_cog`, `doge_cog`, `fin_cog`, `help_cog`, `modal_cog`, `moderation`, `snipe_cog`, `utility`, `view_cog`. Each needs reading + understanding before it can be ported. They run today in their old shape; do these incrementally as you touch them for any other reason.
-- [ ] **Delete `data/rpg.json`** — orphaned (rpg_cog migrated to `cogs/economy.py`). Safe to delete after a final visual sanity check; the import script in `scripts/import_legacy_rpg.py` would still need it if you re-import, so deleting is a soft commit to "I'm done with that data."
-- [ ] **Delete `data/stats2.json`** — still read by at least `cogs/attendance.py`. Delete after attendance migrates.
-- [ ] **Delete `prefixes.json`** — no longer read by `bot.py`. Safe to delete.
+- [ ] **Tests with `dpytest`** — Discord-side interaction tests. Substantial harness setup; 140 service-layer tests already cover the business logic. Worth doing once the cog surface stabilizes.
+- [ ] **Migrate remaining legacy cogs** — `admin`, `attendance`, `avatar_cog`, `doge_cog`, `modal_cog`, `moderation`, `snipe_cog`, `utility`, `view_cog`. Each needs reading + understanding before it can be ported. They run today in their old shape; do these incrementally as you touch them for any other reason.
+- [ ] **Delete `data/stats2.json`** — still read by `cogs/attendance.py`. Delete after attendance migrates.
+- [ ] **Delete `main.py`** (legacy entrypoint) — superseded by `src/vixen/bot.py` and references obsolete files. Safe to delete once you've confirmed no scripts or docs depend on it.
 - [ ] **Production deploy notes (systemd unit, log shipping)** — needs hosting decisions (Render? Fly.io? VPS?).
 
 ### Maybe
@@ -411,6 +420,9 @@ These items aren't blocked technically, but each needs a decision or substantial
 - Buff system: `/use` currently emits flavor text. The handler signature already takes `session` + `user_id`, so adding a "well-fed +50% next /work payout" buff is a Redis-backed temporary key away.
 - Auto-draw lottery: weekly cron task that calls `services.lottery.draw` without admin invocation.
 - Guild settings: extend `Guild` model for disabled commands, mod-log channel, welcome message.
+- Indicator-switching dropdown on `/chart` (alongside the timeframe buttons) so users can flip RSI ↔ MACD ↔ Bollinger without re-running.
+- News / earnings commands via yfinance's other endpoints.
+- `/options` chain viewer (yfinance has it).
 
 ---
 
