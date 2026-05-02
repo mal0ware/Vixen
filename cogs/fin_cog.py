@@ -32,10 +32,13 @@ from vixen.services.cooldown import try_acquire
 from vixen.services.finance import (
     DEFAULT_TIMEFRAME,
     TIMEFRAMES,
+    compute_bollinger,
+    compute_macd,
     compute_moving_averages,
     compute_rsi,
     download_history,
     last_price,
+    normalize_to_base,
     percent_change,
 )
 
@@ -50,6 +53,8 @@ _CHART_TYPE_CHOICES: list[app_commands.Choice[str]] = [
     app_commands.Choice(name="Line + MAs", value="line"),
     app_commands.Choice(name="Candles", value="candles"),
     app_commands.Choice(name="Price + RSI", value="rsi"),
+    app_commands.Choice(name="MACD", value="macd"),
+    app_commands.Choice(name="Bollinger Bands", value="bollinger"),
 ]
 
 
@@ -68,15 +73,25 @@ async def _render_chart(
     if df.empty:
         return None
 
-    # Indicators are cheap; compute everything so the renderers can pick.
+    # Compute only what each renderer needs. MAs are cheap and shared by
+    # the line + RSI views, so we always compute them. Other indicators
+    # only run when the corresponding chart type is requested.
     compute_moving_averages(df)
     if chart_type == "rsi":
         compute_rsi(df)
+    elif chart_type == "macd":
+        compute_macd(df)
+    elif chart_type == "bollinger":
+        compute_bollinger(df)
 
     if chart_type == "candles":
         png = charts.render_candles(df, ticker, timeframe)
     elif chart_type == "rsi":
         png = charts.render_price_with_rsi(df, ticker, timeframe)
+    elif chart_type == "macd":
+        png = charts.render_price_with_macd(df, ticker, timeframe)
+    elif chart_type == "bollinger":
+        png = charts.render_price_with_bollinger(df, ticker, timeframe)
     else:  # "line"
         png = charts.render_price_with_mas(df, ticker, timeframe)
 
@@ -350,6 +365,109 @@ class FinCog(commands.Cog):
         timeframe: str = DEFAULT_TIMEFRAME,
     ) -> None:
         await self._do_chart_reply(ctx, ticker, timeframe, "line")
+
+    # ---------------------------------------------------------------- #
+    # /compare
+    # ---------------------------------------------------------------- #
+
+    @commands.hybrid_command(
+        help="Compare 2-6 tickers, normalized to a common starting point."
+    )
+    @app_commands.describe(
+        tickers="Space-separated symbols, e.g. 'AAPL MSFT GOOG' (2-6 max).",
+        timeframe="Lookback window. Default 3mo.",
+    )
+    @app_commands.choices(timeframe=_TIMEFRAME_CHOICES)
+    async def compare(
+        self,
+        ctx: commands.Context,
+        tickers: str,
+        timeframe: str = DEFAULT_TIMEFRAME,
+    ) -> None:
+        # Split on whitespace, normalize case, dedupe while preserving order.
+        # We cap at 6 because the chart palette only has 6 distinct colours
+        # and beyond that the legend gets unreadable.
+        seen: set[str] = set()
+        ticker_list: list[str] = []
+        for raw in tickers.split():
+            t = raw.strip().upper()
+            if t and t not in seen:
+                seen.add(t)
+                ticker_list.append(t)
+        if len(ticker_list) < 2:
+            await ctx.reply(
+                "Pass at least two tickers separated by spaces, "
+                "e.g. `AAPL MSFT GOOG`.",
+                ephemeral=True,
+            )
+            return
+        if len(ticker_list) > 6:
+            await ctx.reply(
+                "Maximum 6 tickers per comparison.", ephemeral=True
+            )
+            return
+
+        # Same cooldown bucket as /chart — switching between chart and
+        # compare shouldn't bypass anti-spam, and downloads are the costly
+        # bit either way.
+        remaining = await try_acquire(ctx.author.id, "fin_chart")
+        if remaining > 0:
+            await ctx.reply(
+                f"Slow down — try again in {remaining:.0f}s.", ephemeral=True
+            )
+            return
+
+        if ctx.interaction is not None:
+            await ctx.defer()
+
+        # Download every ticker concurrently. asyncio.gather lets the
+        # downloads overlap rather than running serially, so /compare with
+        # 6 tickers takes roughly the same wall-clock as 1.
+        import asyncio
+
+        downloads = await asyncio.gather(
+            *(download_history(t, timeframe) for t in ticker_list),
+            return_exceptions=True,
+        )
+
+        # Filter out tickers that errored or returned empty data; tell the
+        # user which ones we dropped so they can fix typos.
+        series_by_ticker: dict[str, pd.Series] = {}  # type: ignore[name-defined]
+        dropped: list[str] = []
+        for t, df_or_exc in zip(ticker_list, downloads, strict=False):
+            if isinstance(df_or_exc, BaseException) or df_or_exc.empty:
+                dropped.append(t)
+                continue
+            series_by_ticker[t] = normalize_to_base(df_or_exc)
+
+        if not series_by_ticker:
+            await ctx.reply(
+                "Couldn't load data for any of those tickers. "
+                "Check the symbols and try again.",
+                ephemeral=True,
+            )
+            return
+
+        png = charts.render_compare(series_by_ticker, timeframe)
+        file = discord.File(io.BytesIO(png), filename="compare.png")
+
+        # Compose a one-line summary. Show each ticker's percent move; the
+        # winner gets a 🏆 emoji prefix.
+        moves = {
+            t: float(s.iloc[-1] - 100.0) for t, s in series_by_ticker.items()
+        }
+        winner = max(moves, key=moves.get)
+        summary_parts = []
+        for t, pct in moves.items():
+            mark = "🏆 " if t == winner else ""
+            sign = "+" if pct >= 0 else ""
+            summary_parts.append(f"{mark}**{t}** {sign}{pct:.2f}%")
+        summary = " · ".join(summary_parts)
+
+        if dropped:
+            summary += f"\n_(skipped: {', '.join(dropped)})_"
+
+        await ctx.reply(content=summary, file=file)
 
 
 async def setup(bot: commands.Bot) -> None:

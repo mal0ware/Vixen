@@ -180,6 +180,119 @@ def render_price_with_rsi(
     return _figure_to_png_bytes(fig)
 
 
+def render_price_with_macd(
+    data: pd.DataFrame,
+    ticker: str,
+    timeframe: str,
+) -> bytes:
+    """Two-pane chart: price on top, MACD lines + histogram on bottom.
+
+    `data` must have MACD, MACD_SIGNAL, MACD_HIST. The histogram is
+    coloured green when MACD is above signal (bullish) and red when below.
+    """
+    fig, (ax_price, ax_macd) = plt.subplots(
+        2, 1,
+        figsize=(10, 7),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3, 1.4]},
+        facecolor=_BG,
+    )
+
+    # Top pane — just the price line.
+    ax_price.plot(data.index, data["Close"], label="Close", color=_PRICE, linewidth=2)
+    ax_price.set_title(f"{ticker.upper()} — {timeframe} (MACD)")
+    ax_price.set_ylabel("Price")
+    ax_price.legend(loc="upper left", facecolor=_BG, edgecolor=_GRID, labelcolor=_FG)
+    _apply_axes_theme(ax_price)
+
+    # Bottom pane — MACD line, signal line, and histogram bars.
+    ax_macd.plot(data.index, data["MACD"], label="MACD", color=_MA20, linewidth=1.2)
+    ax_macd.plot(
+        data.index, data["MACD_SIGNAL"], label="Signal", color=_MA50, linewidth=1.0
+    )
+    # Histogram colours: bullish bars green, bearish red. Bars are wide so
+    # they're visible against the line plots.
+    hist = data["MACD_HIST"]
+    bar_colors = [_VOL_UP if v >= 0 else _VOL_DOWN for v in hist.fillna(0)]
+    ax_macd.bar(data.index, hist, color=bar_colors, alpha=0.6, width=1.0)
+    ax_macd.axhline(0, color=_GRID, linewidth=0.6)
+    ax_macd.set_ylabel("MACD")
+    ax_macd.legend(loc="upper left", facecolor=_BG, edgecolor=_GRID, labelcolor=_FG)
+    _apply_axes_theme(ax_macd)
+
+    fig.tight_layout()
+    return _figure_to_png_bytes(fig)
+
+
+def render_price_with_bollinger(
+    data: pd.DataFrame,
+    ticker: str,
+    timeframe: str,
+) -> bytes:
+    """Single-pane chart: Close + Bollinger Bands (upper, middle, lower).
+
+    `data` must have BB_UPPER, BB_MID, BB_LOWER. The band area between
+    upper and lower is shaded faintly to make squeezes (narrow) and
+    expansions (wide) immediately visible.
+    """
+    fig, ax = plt.subplots(figsize=(10, 5), facecolor=_BG)
+
+    ax.plot(data.index, data["Close"], label="Close", color=_PRICE, linewidth=2)
+    ax.plot(data.index, data["BB_UPPER"], label="Upper", color=_MA20, linewidth=1)
+    ax.plot(data.index, data["BB_MID"], label="Mid (SMA20)", color=_FG, linewidth=0.8)
+    ax.plot(data.index, data["BB_LOWER"], label="Lower", color=_MA20, linewidth=1)
+
+    # Shade the band so the width is visible at a glance.
+    ax.fill_between(
+        data.index, data["BB_LOWER"], data["BB_UPPER"], color=_MA20, alpha=0.10
+    )
+
+    ax.set_title(f"{ticker.upper()} — {timeframe} (Bollinger)")
+    ax.set_ylabel("Price")
+    ax.legend(loc="upper left", facecolor=_BG, edgecolor=_GRID, labelcolor=_FG)
+    _apply_axes_theme(ax)
+
+    fig.tight_layout()
+    return _figure_to_png_bytes(fig)
+
+
+def render_compare(
+    series_by_ticker: dict[str, pd.Series],
+    timeframe: str,
+) -> bytes:
+    """Plot multiple tickers normalized to a common base on one axis.
+
+    `series_by_ticker` maps "AAPL" -> normalized close-price series (call
+    `services.finance.normalize_to_base` for each ticker before passing).
+    Each ticker gets a distinct colour from a small cycling palette;
+    if you compare more than 6 tickers the colours repeat — fine for a
+    personal bot, would warrant a real palette generator at scale.
+    """
+    fig, ax = plt.subplots(figsize=(10, 5), facecolor=_BG)
+
+    palette = (_PRICE, _MA20, _MA50, _RSI_OVERSOLD, _RSI_OVERBOUGHT, _FG)
+    for i, (ticker, series) in enumerate(series_by_ticker.items()):
+        ax.plot(
+            series.index,
+            series,
+            label=ticker.upper(),
+            color=palette[i % len(palette)],
+            linewidth=1.6,
+        )
+
+    # Reference line at 100 makes "above starting price" / "below starting
+    # price" instantly readable.
+    ax.axhline(100, color=_GRID, linestyle="--", linewidth=0.6)
+
+    ax.set_title(f"Comparison — {timeframe} (rebased to 100)")
+    ax.set_ylabel("Indexed price")
+    ax.legend(loc="upper left", facecolor=_BG, edgecolor=_GRID, labelcolor=_FG)
+    _apply_axes_theme(ax)
+
+    fig.tight_layout()
+    return _figure_to_png_bytes(fig)
+
+
 def render_candles(
     data: pd.DataFrame,
     ticker: str,
@@ -219,6 +332,9 @@ def render_candles(
 
 __all__ = [
     "render_candles",
+    "render_compare",
+    "render_price_with_bollinger",
+    "render_price_with_macd",
     "render_price_with_mas",
     "render_price_with_rsi",
 ]

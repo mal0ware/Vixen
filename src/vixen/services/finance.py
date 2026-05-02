@@ -131,6 +131,73 @@ def compute_moving_averages(
     return data
 
 
+def compute_macd(
+    data: pd.DataFrame,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> pd.DataFrame:
+    """Add MACD, MACD_SIGNAL, MACD_HIST columns.
+
+    MACD = EMA(fast) − EMA(slow), where EMA is exponentially-weighted.
+    Signal = EMA(MACD, signal). Histogram = MACD − Signal — the bar chart
+    that traders watch for crossovers.
+
+    The 12/26/9 default is the textbook setup (Appel's original). EMA
+    smoothing gives more weight to recent candles than a simple moving
+    average — feels more responsive, which is the whole point of MACD.
+    """
+    ema_fast = data["Close"].ewm(span=fast, adjust=False).mean()
+    ema_slow = data["Close"].ewm(span=slow, adjust=False).mean()
+    data["MACD"] = ema_fast - ema_slow
+    data["MACD_SIGNAL"] = data["MACD"].ewm(span=signal, adjust=False).mean()
+    data["MACD_HIST"] = data["MACD"] - data["MACD_SIGNAL"]
+    return data
+
+
+def compute_bollinger(
+    data: pd.DataFrame,
+    window: int = 20,
+    num_std: float = 2.0,
+) -> pd.DataFrame:
+    """Add BB_MID, BB_UPPER, BB_LOWER columns.
+
+    Middle = SMA(window). Upper/Lower = middle ± num_std × rolling stddev.
+    20-period and 2σ is the textbook Bollinger configuration (~95% of
+    samples expected inside the band under a normal distribution).
+
+    Touching the upper band is conventionally a "stretched-up" signal,
+    lower band a "stretched-down" signal — but bands can ride high in
+    strong trends, so don't read them as buy/sell triggers in isolation.
+    """
+    middle = data["Close"].rolling(window=window, min_periods=window).mean()
+    std = data["Close"].rolling(window=window, min_periods=window).std()
+    data["BB_MID"] = middle
+    data["BB_UPPER"] = middle + num_std * std
+    data["BB_LOWER"] = middle - num_std * std
+    return data
+
+
+def normalize_to_base(
+    data: pd.DataFrame,
+    base: float = 100.0,
+) -> pd.Series:
+    """Return a Close-price series rebased so the first value equals `base`.
+
+    Used by /compare to put multiple tickers on the same scale: AAPL at
+    $200 and CVX at $150 both start at 100, so the chart shows relative
+    percentage moves rather than absolute dollar lines that can't be
+    visually compared.
+    """
+    if data.empty:
+        return pd.Series(dtype=float)
+    closes = data["Close"]
+    first = float(closes.iloc[0])
+    if first == 0:
+        return closes  # avoid divide-by-zero; degenerate series
+    return closes / first * base
+
+
 def last_price(data: pd.DataFrame) -> float:
     """Return the most recent close price as a float. Empty frame → 0.0."""
     if data.empty:
@@ -152,9 +219,12 @@ def percent_change(data: pd.DataFrame) -> float:
 __all__ = [
     "DEFAULT_TIMEFRAME",
     "TIMEFRAMES",
+    "compute_bollinger",
+    "compute_macd",
     "compute_moving_averages",
     "compute_rsi",
     "download_history",
     "last_price",
+    "normalize_to_base",
     "percent_change",
 ]
