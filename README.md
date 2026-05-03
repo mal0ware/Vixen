@@ -57,11 +57,12 @@ vixen/
 │   ├── cache.py               # Redis async client
 │   ├── models/                # ORM models — one file per table
 │   │   ├── base.py            # Base + TimestampMixin
-│   │   ├── user.py            # cash, bank, follows user across guilds
+│   │   ├── user.py            # cash, bank, ucid; follows user across guilds
 │   │   ├── guild.py           # per-server settings (prefix, etc.)
 │   │   ├── inventory.py       # user-owned items (qty per item_key)
 │   │   ├── lottery.py         # entries staked into the current lottery draw
 │   │   ├── reminder.py        # scheduled reminders + fired flag
+│   │   ├── snipe.py           # snipe-game points scoreboard
 │   │   └── transaction.py     # append-only audit log of cash movements
 │   └── services/              # business logic — cogs stay thin
 │       ├── economy.py         # change_cash, get_or_create_user, typed errors
@@ -79,12 +80,14 @@ vixen/
 │       ├── finance.py         # async yfinance + RSI / MAs / MACD / Bollinger
 │       ├── charts.py          # dark-themed render functions returning bytes
 │       ├── weather.py         # Open-Meteo geocode + forecast (no API key)
-│       └── http.py            # shared aiohttp ClientSession for outbound HTTP
+│       ├── http.py            # shared aiohttp ClientSession for outbound HTTP
+│       ├── attendance.py      # UCID get/set on User row
+│       └── snipe.py           # snipe leaderboard read + add_points
 ├── tests/
 │   ├── conftest.py            # per-test Postgres DB + Redis db=1 fixtures
 │   └── services/              # service-layer tests (real DB + Redis, no mocks)
 │
-├── cogs/                      # ACTIVE LOAD PATH — almost entirely new-shape now
+├── cogs/                      # ACTIVE LOAD PATH — every cog is new-shape
 │   ├── economy.py             # /profile, /work, /coinflip
 │   ├── shop.py                # /shop, /buy, /sell, /inventory
 │   ├── use.py                 # /use consumables
@@ -106,14 +109,9 @@ vixen/
 │   ├── avatar_cog.py          # /avatar
 │   ├── utility.py             # /dog, /echo
 │   ├── doge_cog.py            # /doge — DOGE.gov savings boxplot
-│   ├── attendance.py          # OLD SHAPE — meeting check-ins via modal
-│   │                          #  (still backed by data/stats2.json + bot.data)
-│   └── snipe_cog.py           # OLD SHAPE — /snipe_leaderboard pagination
-│                              #  (still reads bot.stats2)
-├── data/                      # LEGACY — JSON state files; deleted as each cog migrates
-├── main.py                    # LEGACY — old bot entrypoint, superseded by src/vixen/bot.py
-├── prefixes.json              # LEGACY — no longer read; replaced by Guild + Redis prefix service
-├── data.json                  # LEGACY — read by remaining old-shape cogs
+│   ├── attendance.py          # /attendance — meeting check-in via modal,
+│   │                          #  UCID stored on the User row
+│   └── snipe_cog.py           # /snipe_leaderboard — paginated, Postgres-backed
 │
 └── vixenjavascriptarchive/    # archived discord.js v13 bot from 2022
 ```
@@ -420,16 +418,15 @@ In your dev guild, exercise each command. Slash commands sync to the dev guild o
 - [x] Migrate `admin` — drop duplicate `change_prefix`, modernize `/sync` (guild/global), add `/reload-cog`, `/debug-commands`
 - [x] Migrate `moderation` — typed Discord errors, structlog audit, result embeds
 - [x] Migrate `view_cog` — drop `/menu` demo, improve `/rps` with optional cash wager via `change_cash`
+- [x] Migrate `attendance` — UCID moves to `users.ucid`; modal flow rewritten thin
+- [x] Migrate `snipe_cog` — points move to `snipe_scores` table; paginated view rewritten with one `_NavButton` class instead of five subclasses
+- [x] One-shot import script `scripts/import_legacy_stats.py` for migrating UCIDs + snipe scores from the legacy JSON
+- [x] Drop `bot.legacy_data` / `bot.legacy_stats2` aliases — bot is now JSON-free at runtime
+- [x] Delete `main.py` (legacy entrypoint) and `data/stats2.json` (orphaned)
 
 ### Deferred (and why)
 
-These items aren't blocked technically, but each needs a decision or substantial work that didn't make sense in the same push:
-
-- [ ] **Tests with `dpytest`** — Discord-side interaction tests. Substantial harness setup; 140 service-layer tests already cover the business logic. Worth doing once the cog surface stabilizes.
-- [ ] **Migrate `attendance`** — currently reads `data.json` and `data/stats2.json` for UCID + points data. Full migration needs new `Attendance` / `Meeting` models + a migration. The existing JSON path works; structlog'd already.
-- [ ] **Migrate `snipe_cog`** — paginated leaderboard backed by `bot.stats2` (= `data/stats2.json`). Same blocker as attendance. The slash command works.
-- [ ] **Delete `data/stats2.json`** — depends on the two above.
-- [ ] **Delete `main.py`** (legacy entrypoint) — superseded by `src/vixen/bot.py`. References obsolete JSON files; would crash if run. Safe to delete once you've confirmed no scripts or docs depend on it.
+- [ ] **Tests with `dpytest`** — Discord-side interaction tests. Substantial harness setup; 154 service-layer tests already cover the business logic. Worth doing once the cog surface stabilizes.
 - [ ] **Production deploy notes (systemd unit, log shipping)** — needs hosting decisions (Render? Fly.io? VPS?).
 
 ### Maybe
