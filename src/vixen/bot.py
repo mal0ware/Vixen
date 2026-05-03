@@ -22,20 +22,11 @@ Run from the project root:
     python -m vixen          # via the console-script entry in pyproject.toml
     # or
     python src/vixen/bot.py  # equivalent
-
-Why the legacy bits are still here:
-
-The old `main.py` loaded prefixes.json, data.json, data/stats2.json, and
-data/rpg.json, and attached them to the bot so cogs could read/write them.
-Until each cog is migrated to use Postgres + Redis, the bot still needs to
-provide those attributes or every legacy cog crashes on import. They get
-removed one-by-one as each cog is rewritten.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from pathlib import Path
 
@@ -54,24 +45,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 COGS_DIR = PROJECT_ROOT / "cogs"
 
 log = get_logger(__name__)
-
-
-# --------------------------------------------------------------------------- #
-# Legacy JSON state — loaded once at startup, attached to the bot instance,
-# read/written by unmigrated cogs. Disappears as cogs migrate to Postgres.
-# --------------------------------------------------------------------------- #
-
-
-def _load_json(path: Path) -> dict:
-    """Load a JSON file, returning {} if it doesn't exist.
-
-    Used only for transitional state. Real persistence will live in Postgres.
-    """
-    if not path.exists():
-        log.warning("legacy_json_missing", path=str(path))
-        return {}
-    with path.open(encoding="utf-8") as f:
-        return json.load(f)
 
 
 def _make_prefix_callable():
@@ -111,15 +84,11 @@ def _make_prefix_callable():
 class VixenBot(commands.Bot):
     """Custom Bot.
 
-    Two reasons to subclass instead of using `commands.Bot` directly:
-
-    1. We can override `setup_hook`, which is the discord.py-blessed place
-       to load extensions and sync the application command tree exactly
-       once at startup. (`on_ready` fires on every reconnect, so loading
-       there causes ExtensionAlreadyLoaded errors on flaky networks.)
-
-    2. We can attach shared state (legacy JSON for unmigrated cogs) without
-       resorting to module-level globals.
+    We subclass instead of using `commands.Bot` directly so we can override
+    `setup_hook` — the discord.py-blessed place to load extensions and sync
+    the application command tree exactly once at startup. `on_ready` fires
+    on every reconnect, so loading there causes ExtensionAlreadyLoaded
+    errors on flaky networks.
     """
 
     def __init__(self, *, intents: discord.Intents, prefix_callable):
@@ -128,12 +97,6 @@ class VixenBot(commands.Bot):
             intents=intents,
             help_command=None,
         )
-
-        # Legacy attributes that existing cogs reference. These get
-        # populated by `_attach_legacy_state` in `_build_bot()`.
-        # Each line dies as the corresponding cog migrates to Postgres.
-        self.legacy_data: dict = {}
-        self.legacy_stats2: dict = {}
 
     async def setup_hook(self) -> None:
         """One-shot startup hook. Loads cogs, syncs slash tree."""
@@ -203,22 +166,12 @@ class VixenBot(commands.Bot):
 
 
 def _build_bot() -> VixenBot:
-    """Construct the bot with legacy state attached.
+    """Construct the bot. Pure setup — no JSON state, no legacy aliases.
 
-    The `bot.data` and `bot.stats2` aliases below are the names existing
-    cogs use today. We keep them stable so unmigrated cogs work. Each gets
-    deleted as its consumer cog migrates to Postgres.
-
-    `bot.rpg` was removed when rpg_cog.py → cogs/economy.py landed
-    (Postgres-backed). data/rpg.json is retained on disk as a backup until
-    the import is verified, then can be deleted.
+    All persistent state lives in Postgres via the services layer; the
+    bot itself is now stateless beyond what discord.py's command tree
+    holds.
     """
-    legacy_data = _load_json(PROJECT_ROOT / "data.json")
-    legacy_stats2 = _load_json(PROJECT_ROOT / "data" / "stats2.json")
-    # `prefixes.json` is no longer read — guild prefixes live in Postgres
-    # via `services.prefix.get_prefix`, cached in Redis. The file can be
-    # deleted once we verify no environment still falls back on it.
-
     intents = discord.Intents.default()
     # Required to read message content for prefix-style commands. Must also
     # be enabled in the Developer Portal under Bot -> Privileged Intents.
@@ -228,12 +181,6 @@ def _build_bot() -> VixenBot:
         intents=intents,
         prefix_callable=_make_prefix_callable(),
     )
-
-    # Attribute aliases used by existing cogs (admin, snipe, etc.).
-    # As each cog migrates to the DB layer, the corresponding line below
-    # gets deleted.
-    bot.data = legacy_data            # type: ignore[attr-defined]
-    bot.stats2 = legacy_stats2        # type: ignore[attr-defined]
 
     _register_event_handlers(bot)
     return bot
