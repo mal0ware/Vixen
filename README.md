@@ -1,199 +1,285 @@
-# Vixen
+<div align="center">
 
-> *Very Intelligent Xenial Evolving Network*
+# 🦊 Vixen
 
-A personal Discord assistant + economy / mini-game bot, built for self-hosting in my own servers. Inspired by [Dank Memer](https://dankmemer.lol/) for the economy / mini-game pattern, but with first-class personal-assistant features (finance dashboards, reminders, weather, notes) layered on top.
+**Very Intelligent Xenial Evolving Network**
 
-> **Status:** v0.2 scaffolding — fresh Python rewrite (the old discord.js bot lives untouched in `vixenjavascriptarchive/`). Bot still runs on the legacy `main.py` + JSON files; the new `src/vixen/` skeleton is being filled in cog-by-cog.
+A personal Discord assistant and economy / mini-game bot, built for self-hosting.
+Inspired by [Dank Memer](https://dankmemer.lol/) for the economy pattern, with
+first-class personal-assistant features (finance charts, reminders, weather,
+notes) layered on top.
 
-> **License:** UNLICENSED. Personal use only. Repo is private.
+[![Python](https://img.shields.io/badge/python-3.12+-3776AB?logo=python&logoColor=white)](#)
+[![discord.py](https://img.shields.io/badge/discord.py-2.x-5865F2?logo=discord&logoColor=white)](https://discordpy.readthedocs.io/)
+[![Postgres](https://img.shields.io/badge/postgres-16-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Redis](https://img.shields.io/badge/redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io/)
+[![Style: ruff](https://img.shields.io/badge/style-ruff-FCC21B)](https://docs.astral.sh/ruff/)
+[![License](https://img.shields.io/badge/license-personal%20use-orange)](#license)
+
+[![Commands](https://img.shields.io/badge/slash--commands-38-7289DA)](#commands)
+[![Cogs](https://img.shields.io/badge/cogs-22-7289DA)](#project-structure)
+[![Tables](https://img.shields.io/badge/postgres--tables-7-336791)](#database-schema)
+[![Tests](https://img.shields.io/badge/tests-154%20passing-3FB950)](#testing)
+[![LOC](https://img.shields.io/badge/python-9.4k%20LOC-3572A5)](#)
+
+</div>
 
 ---
 
-## Tech stack
+## Table of contents
 
-Deliberately conventional. Everything below is also used in [Linger](https://github.com/mal0ware/Linger), so what you learn carries over.
+- [Features](#features)
+- [Commands](#commands)
+  - [Economy](#-economy)
+  - [Shop & Inventory](#-shop--inventory)
+  - [Mini-games](#-mini-games)
+  - [Finance / Charts](#-finance--charts)
+  - [Weather](#%EF%B8%8F-weather)
+  - [Reminders](#-reminders)
+  - [Leaderboards](#-leaderboards)
+  - [Attendance](#-attendance)
+  - [Utility](#-utility)
+  - [Moderation](#-moderation)
+  - [Admin / Owner](#%EF%B8%8F-admin--owner-only)
+  - [Help](#-help)
+- [Quickstart](#quickstart)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+  - [Cogs and services](#cogs-and-services)
+  - [Database schema](#database-schema)
+  - [How a cog runs end-to-end](#how-a-cog-runs-end-to-end)
+- [Adding a feature](#adding-a-feature)
+- [Testing](#testing)
+- [Project structure](#project-structure)
+- [Roadmap](#roadmap)
+- [License](#license)
 
-| Layer | Choice | Why |
+---
+
+## Features
+
+- 💰 **Persistent economy** — cash, bank, transaction-audit log, Postgres-backed
+- 🛒 **Shop & inventory** — static catalog, atomic buy / sell / use
+- 🎰 **Mini-games** — `/dice`, `/slots`, `/coinflip`, `/rps`, `/fish`, `/lottery`, `/rob`
+- 📊 **Interactive finance charts** — yfinance-backed; line / candle / RSI / MACD / Bollinger; in-place timeframe buttons
+- ☁️ **Weather** — Open-Meteo current conditions + multi-day forecast (no API key)
+- ⏰ **Reminders** — DM yourself in `5m`, `1h30m`, `2d`, etc. Background poller fires due reminders.
+- 🏆 **Live leaderboards** — Redis sorted set, auto-syncs on every cash event
+- 🛡️ **Anti-spam cooldowns** — Redis-backed escalating curve (1s → 3s → 5s plateau, 30s idle reset)
+- 🔧 **Per-guild prefixes** — Postgres source of truth, Redis-cached lookup
+- 📚 **Discoverability** — `/help` groups every command into clean categories
+- ⚙️ **Owner & moderation** — `/sync`, `/reload-cog`, `/ban`, `/unban`, `/kick` with structured audit logging
+
+---
+
+## Commands
+
+Click a header to jump to the section. Permissions and cooldowns are listed in
+each table; "—" means no cooldown beyond Discord's own outbound rate limit, and
+"💰" means the command costs or pays cash.
+
+### 💰 Economy
+
+| Command | What it does | Args | Cost / Cooldown |
+|---|---|---|---|
+| `/profile` | Show cash, bank, item count, account age. | `[user]` | — |
+| `/work` | Earn 25–125 cash. | — | escalating |
+| `/coinflip` | Bet on a coin flip (1:1). | `wager` | 💰 / escalating |
+
+### 🛒 Shop & Inventory
+
+| Command | What it does | Args | Cost / Cooldown |
+|---|---|---|---|
+| `/shop` | Browse the item catalog. | — | — |
+| `/buy` | Buy an item. Atomic: cash debit + inventory increment. | `item` `[qty]` | 💰 / escalating |
+| `/sell` | Sell back at 25 % of buy price. | `item` `[qty]` | 💰 / escalating |
+| `/inventory` | Show your or another user's inventory. | `[user]` | — |
+| `/use` | Consume one of an item, run its effect handler. | `item` | escalating |
+
+**Catalog** (5 items): 🍞 Bread, ☕ Coffee, 🎣 Fishing Rod, 🎟️ Lottery Ticket, 🔒 Padlock.
+Bread and coffee are consumables; the rest are functional items used by other commands.
+
+### 🎰 Mini-games
+
+| Command | What it does | Args | Cost / Cooldown |
+|---|---|---|---|
+| `/dice` | Roll 2d6. Snake-eyes / boxcars (2 or 12) pay 10×, 7 returns wager, all else loses. | `wager` | 💰 / escalating |
+| `/slots` | Spin 3 reels. All-three-match wins 25×; otherwise lose. | `wager` | 💰 / escalating |
+| `/fish` | Cast a line. Random catch from a weighted table; rod is durable. | — | escalating, **needs `🎣 Fishing Rod`** |
+| `/rps` | Rock-paper-scissors against the bot. Optional cash wager. | `[wager]` | 💰 if wagered |
+| `/lottery enter` | Stake `lottery_ticket`s into the current draw. | `[count=1]` | escalating, **needs `🎟️ Lottery Ticket`** |
+| `/lottery pool` | Show current pot + entry count. | — | — |
+| `/lottery draw` *(admin)* | Pick a weighted-random winner; pay out; reset entries. | — | — |
+| `/rob` | Try to steal cash from a target. 50 % success, padlock blocks once. | `target` | 💰 / escalating |
+
+### 📊 Finance / Charts
+
+Backed by yfinance (free historical data), rendered with matplotlib + mplfinance
+in a Discord-themed dark palette at 150 DPI. All commands accept any timeframe
+in `{1d, 5d, 1mo, 3mo, 1y, 5y}`.
+
+| Command | What it does | Args |
 |---|---|---|
-| Language | Python 3.12 | Async, batteries-included, matches Linger. |
-| Discord library | [`discord.py`](https://discordpy.readthedocs.io/) 2.x | Official-quality, hybrid commands (slash + prefix in one decorator), modern `setup_hook` lifecycle. |
-| HTTP | `aiohttp` | Async; doesn't block the event loop the way `requests` does. |
-| Config | `pydantic-settings` | Typed env vars; fail-fast at boot if anything's missing. |
-| Database | PostgreSQL 16 | Relational, transactional, free, scales further than you'd expect. |
-| ORM | SQLAlchemy 2.0 (async) | Standard. Pairs with Alembic for schema versioning. |
-| Migrations | Alembic | Versioned schema changes that replay against any DB. |
-| Cache / hot state | Redis 7 | Cooldowns, rate limits, leaderboards (sorted sets), prefix cache. |
-| Logging | `structlog` | Structured logs you can grep / ship to a log aggregator. |
-| Process supervisor | `systemd` (prod) / direct (dev) | Plain Python, no JS-flavored process manager. |
-| Local infra | Docker Compose | Postgres + Redis in containers; no host pollution. |
-| Tests | pytest + pytest-asyncio + dpytest | Standard. dpytest mocks the Discord API. |
-| Lint / format | ruff | One tool replaces black + isort + flake8 + pyupgrade. |
-| Type check | mypy | Strict optional, opt-in. |
+| `/chart` | **Primary command.** Renders a chart and attaches **interactive timeframe buttons** that re-render the same message in place. | `ticker` `[timeframe=3mo]` `[chart_type=line]` |
+| `/candles` | OHLC candlestick chart with volume sub-pane. | `ticker` `[timeframe]` |
+| `/rsi` | Price + MAs on top, RSI on bottom. | `ticker` `[timeframe]` |
+| `/moving_average` | Price + MA20 + MA50. | `ticker` `[timeframe]` |
+| `/compare` | 2–6 tickers normalized to a common base (100), winner gets 🏆. | `tickers` `[timeframe]` |
 
-### What identifies a user, across all servers
+`chart_type` choices: **Line + MAs**, **Candles**, **Price + RSI**, **MACD**, **Bollinger Bands**.
 
-Every Discord account has a 64-bit ID (a "snowflake") that never changes. discord.py hands it to every command via `ctx.author.id`. Vixen keys its `users` table off that ID, so a user's wallet, inventory, and stats follow them across every server they meet the bot in. There's no magic — every Discord bot has access to this; the work is in actually persisting it.
+### ☁️ Weather
 
----
+Open-Meteo geocoding + forecast — no API key required.
 
-## Repository layout
+| Command | What it does | Args |
+|---|---|---|
+| `/weather` | Current conditions + 3-day forecast for a city. | `city` |
+| `/forecast` | Multi-day forecast (1–7 days). | `city` `[days=5]` |
 
-```
-vixen/
-├── pyproject.toml             # deps + tool config (ruff, mypy, pytest)
-├── docker-compose.yml         # local Postgres + Redis
-├── alembic.ini                # alembic config
-├── alembic/
-│   ├── env.py                 # async-aware migration runner
-│   └── versions/              # generated migrations (one per schema change)
-├── src/vixen/
-│   ├── __init__.py
-│   ├── __main__.py            # `python -m vixen` -> bot.run()
-│   ├── bot.py                 # VixenBot subclass + entrypoint
-│   ├── config.py              # pydantic-settings Settings
-│   ├── logging.py             # structlog setup
-│   ├── db.py                  # async SQLAlchemy session factory
-│   ├── cache.py               # Redis async client
-│   ├── models/                # ORM models — one file per table
-│   │   ├── base.py            # Base + TimestampMixin
-│   │   ├── user.py            # cash, bank, ucid; follows user across guilds
-│   │   ├── guild.py           # per-server settings (prefix, etc.)
-│   │   ├── inventory.py       # user-owned items (qty per item_key)
-│   │   ├── lottery.py         # entries staked into the current lottery draw
-│   │   ├── reminder.py        # scheduled reminders + fired flag
-│   │   ├── snipe.py           # snipe-game points scoreboard
-│   │   └── transaction.py     # append-only audit log of cash movements
-│   └── services/              # business logic — cogs stay thin
-│       ├── economy.py         # change_cash, get_or_create_user, typed errors
-│       ├── shop.py            # buy/sell/list/has_item primitives
-│       ├── items.py           # static item catalog
-│       ├── effects.py         # /use effect-handler registry
-│       ├── use.py             # /use orchestration (consume + dispatch effect)
-│       ├── cooldown.py        # Redis escalating cooldown service
-│       ├── leaderboard.py     # Redis ZSET wealth leaderboard
-│       ├── fishing.py         # /fish weighted catch table
-│       ├── lottery.py         # /lottery enter/pool/draw mechanics
-│       ├── robbery.py         # /rob outcomes (blocked/failed/succeeded)
-│       ├── reminders.py       # /remind create/list/cancel + due polling
-│       ├── prefix.py          # per-guild prefix with Redis cache
-│       ├── finance.py         # async yfinance + RSI / MAs / MACD / Bollinger
-│       ├── charts.py          # dark-themed render functions returning bytes
-│       ├── weather.py         # Open-Meteo geocode + forecast (no API key)
-│       ├── http.py            # shared aiohttp ClientSession for outbound HTTP
-│       ├── attendance.py      # UCID get/set on User row
-│       └── snipe.py           # snipe leaderboard read + add_points
-├── tests/
-│   ├── conftest.py            # per-test Postgres DB + Redis db=1 fixtures
-│   └── services/              # service-layer tests (real DB + Redis, no mocks)
-│
-├── cogs/                      # ACTIVE LOAD PATH — every cog is new-shape
-│   ├── economy.py             # /profile, /work, /coinflip
-│   ├── shop.py                # /shop, /buy, /sell, /inventory
-│   ├── use.py                 # /use consumables
-│   ├── leaderboard.py         # /leaderboard top / rank
-│   ├── games.py               # /dice, /slots
-│   ├── fishing.py             # /fish
-│   ├── lottery.py             # /lottery enter/pool/draw
-│   ├── robbery.py             # /rob
-│   ├── reminders.py           # /remind set/list/cancel + 30s polling task
-│   ├── prefix.py              # /setprefix
-│   ├── fin_cog.py             # /chart (interactive), /candles, /rsi,
-│   │                          #  /moving_average, /compare
-│   ├── weather.py             # /weather, /forecast
-│   ├── help_cog.py            # category-grouped /help
-│   ├── admin.py               # /sync, /reload-cog, /debug-commands (owner only)
-│   ├── moderation.py          # /ban, /unban, /kick + audit log
-│   ├── view_cog.py            # /rps (with optional cash wager)
-│   ├── modal_cog.py           # /modal demo (View + Modal patterns)
-│   ├── avatar_cog.py          # /avatar
-│   ├── utility.py             # /dog, /echo
-│   ├── doge_cog.py            # /doge — DOGE.gov savings boxplot
-│   ├── attendance.py          # /attendance — meeting check-in via modal,
-│   │                          #  UCID stored on the User row
-│   └── snipe_cog.py           # /snipe_leaderboard — paginated, Postgres-backed
-│
-└── vixenjavascriptarchive/    # archived discord.js v13 bot from 2022
-```
+### ⏰ Reminders
 
-Two senses of "legacy" coexist during the migration — see [Cogs and services](#cogs-and-services) below for what they mean and why the new-shape cogs live in the root `cogs/` directory rather than under `src/vixen/`.
+Background poller wakes every 30 s, fires due reminders as DMs.
+
+| Command | What it does | Args |
+|---|---|---|
+| `/remind set` | Schedule a future DM. Duration syntax: `5m`, `1h30m`, `2d`. | `duration` `message` |
+| `/remind list` | Show your pending reminders. | — |
+| `/remind cancel` | Cancel one of your reminders by ID. | `reminder_id` |
+
+### 🏆 Leaderboards
+
+Redis sorted-set, auto-synced on every cash event.
+
+| Command | What it does | Args |
+|---|---|---|
+| `/leaderboard top` | Top 10 users by total wealth (cash + bank). | — |
+| `/leaderboard rank` | Your rank + total wealth. | — |
+| `/snipe_leaderboard` | Paginated snipe-game scoreboard (legacy points). | — |
+
+### 📜 Attendance
+
+| Command | What it does | Args |
+|---|---|---|
+| `/attendance` | Open a meeting check-in embed for a SIG role. Members click to register; first-timers get a UCID-entry modal. | `sig` |
+
+### 🔧 Utility
+
+| Command | What it does | Args | Permission |
+|---|---|---|---|
+| `/avatar` | Show a user's avatar at full size. | `[user]` | — |
+| `/dog` | Random dog photo from dog.ceo. | — | — |
+| `/echo` | Send a message via configured webhook. | `message` | Manage Messages |
+| `/modal` | Interactive demo (button + modal patterns). | — | — |
+| `/doge` | DOGE.gov savings boxplot. | `[endpoint]` `[sort_by]` `[sort_order]` `[page]` `[per_page]` | — |
+
+### 🛡️ Moderation
+
+| Command | What it does | Args | Permission |
+|---|---|---|---|
+| `/ban` | Ban a user from the server. | `user` `[reason]` | Ban Members |
+| `/unban` | Unban by user ID. | `user_id` `[reason]` | Ban Members |
+| `/kick` | Kick a user. | `user` `[reason]` | Kick Members |
+
+All three log to Discord's audit log AND to structlog.
+
+### ⚙️ Admin / Owner-only
+
+| Command | What it does | Args | Permission |
+|---|---|---|---|
+| `/setprefix` | Set this server's command prefix. Updates Postgres + invalidates Redis cache. | `new_prefix` | Administrator |
+| `/sync` | Resync slash commands. | `[scope=guild]` | Bot owner |
+| `/reload-cog` | Hot-reload one cog by name. | `cog_name` | Bot owner |
+| `/debug-commands` | List every registered slash command. | — | Bot owner |
+
+### 📚 Help
+
+| Command | What it does | Args |
+|---|---|---|
+| `/help` | Overview embed grouped by category, or detail for one command. | `[name]` |
 
 ---
 
-## Getting started (dev)
+## Quickstart
 
-### 1. Install Python 3.12+ and Docker
+### 1. Install Python 3.12+ and Postgres + Redis
 
-- Python: https://www.python.org/downloads/
-- Docker Desktop: https://www.docker.com/products/docker-desktop/
+Two paths:
 
-### 2. Bring up Postgres + Redis
+**Docker** (matches `docker-compose.yml`):
 
 ```bash
 docker compose up -d
 ```
 
-Verifies with `docker compose ps` — both should be `healthy`.
-
-> **Ports:** Postgres is exposed on host port **5433** (not the default 5432), Redis on **6380** (not the default 6379). This is intentional — Linger uses the defaults, and Vixen needs to coexist on the same machine. Inside the containers the standard ports are used; only the host-side mapping is offset.
-
-### 3. Set up the Python environment
-
-From the repo root:
+**Native (macOS Homebrew)** — leaner if you don't want Docker:
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate           # Windows
-# source .venv/bin/activate      # macOS / Linux / WSL
+brew install postgresql@16 redis
+brew services start postgresql@16
+brew services start redis
+createdb vixen
+```
 
+Default ports: Postgres `5432`, Redis `6379` (native) or `5433` / `6380` (Docker offset).
+
+### 2. Python environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-`-e` (editable) means `import vixen` resolves to your working copy, so file edits are picked up without reinstalling.
-
-### 4. Configure `.env`
+### 3. Configure `.env`
 
 ```bash
 cp .env.example .env
 ```
 
-Then fill in:
+Fill in:
 
-- `DISCORD_TOKEN` — from https://discord.com/developers/applications/&lt;APP_ID&gt;/bot → "Reset Token"
-- `GUILD_ID` — your dev guild's ID. Right-click the server icon → "Copy Server ID" (Developer Mode must be enabled in Discord settings).
+| Variable | What |
+|---|---|
+| `DISCORD_TOKEN` | From the Discord Developer Portal → Bot → Reset Token |
+| `GUILD_ID` | Your dev server's ID (Developer Mode → right-click server → Copy ID) |
+| `DATABASE_URL` | Defaults match `docker-compose.yml`. Override for native Postgres. |
+| `REDIS_URL` | Defaults match `docker-compose.yml`. Override for native Redis. |
+| `ENV` | `dev` (per-guild fast sync) or `prod` (global sync). |
 
-The default `DATABASE_URL` and `REDIS_URL` already match what `docker-compose.yml` exposes.
-
-### 5. Apply migrations
-
-Once `src/vixen/bot.py` is in place and the first migration is generated:
+### 4. Apply migrations
 
 ```bash
 alembic upgrade head
 ```
 
-This creates the `users`, `guilds`, `inventory_items`, and `transactions` tables.
+Creates 7 tables: `users`, `guilds`, `inventory_items`, `transactions`,
+`lottery_entries`, `reminders`, `snipe_scores`.
 
-To generate a new migration after editing models:
-
-```bash
-alembic revision --autogenerate -m "add foo column"
-alembic upgrade head
-```
-
-### 6. Run the bot
-
-For now (legacy entrypoint):
-
-```bash
-python main.py
-```
-
-After the cog migration:
+### 5. Run the bot
 
 ```bash
 python -m vixen
 ```
+
+Look for `bot_ready user=<name> user_id=<id>` in the logs.
+
+---
+
+## Configuration
+
+All config flows through `pydantic-settings` (see `src/vixen/config.py`).
+Values are read from environment variables, falling back to `.env`.
+
+| Variable | Default | Notes |
+|---|---|---|
+| `DISCORD_TOKEN` | _(empty — fast-fails on launch)_ | Bot token. Required. |
+| `GUILD_ID` | `0` _(empty — required when `ENV=dev`)_ | Primary dev guild for fast slash sync. |
+| `DATABASE_URL` | `postgresql+asyncpg://vixen:vixen@localhost:5433/vixen` | Async SQLAlchemy URL. |
+| `REDIS_URL` | `redis://localhost:6380/0` | Redis URL. db=0 in production. |
+| `ENV` | `dev` | `dev` (per-guild sync) or `prod` (global sync). |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
+| `WEBHOOK_URL` | _(unset)_ | Optional. Used by `/echo`. |
 
 ---
 
@@ -206,36 +292,34 @@ python -m vixen
                             │
                 ┌───────────▼───────────┐
                 │   discord.py 2.x      │ ─── aiohttp ──► external APIs
-                │   (VixenBot subclass) │                 (yfinance, weather, …)
-                └───────────┬───────────┘
+                │   (VixenBot subclass) │                 (yfinance, Open-Meteo,
+                └───────────┬───────────┘                  dog.ceo, doge.gov)
                   ┌─────────┴─────────┐
                   ▼                   ▼
               Postgres              Redis
         (durable state:       (hot state:
          users, guilds,        cooldowns,
          inventory,            leaderboards,
-         transactions)         prefix cache,
-                               rate limits)
+         transactions,         prefix cache)
+         lottery, reminders,
+         snipe_scores)
 ```
 
 ### Why two stores
 
-Postgres is for things that must survive a restart and need real queries (joins, aggregates, transactions). Redis is for things that change every few seconds (cooldowns, presence, leaderboards) and only need fast key-based access. Trying to use one for both means you either (a) hammer Postgres with high-frequency writes that don't justify a transaction, or (b) lose user data on Redis restart. The split is the standard pattern.
+Postgres is for things that must survive restart and need real queries (joins,
+aggregates, transactions). Redis is for things that change every few seconds
+(cooldowns, leaderboards) and only need fast key-based access. Trying to use
+one for both means you either hammer Postgres with high-frequency writes or
+lose user data on Redis restart. The split is the standard pattern.
 
 ### Cogs and services
 
-A **cog** is discord.py's term for a class that groups related commands. Every command in Vixen lives in a cog. That isn't changing — what's changing is the *shape* of cogs, not the concept.
+A **cog** is discord.py's term for a class that groups related commands.
+Every command in Vixen lives in a cog — that part is unchanged from the
+JS-era bot. What's changed is the **shape** of cogs.
 
-#### How a cog runs end-to-end
-
-1. **Boot.** `bot.py` calls `setup_hook` once at startup. That walks the `cogs/` directory and loads every `.py` file as an extension. Each extension registers its `Cog` class with the bot via `await bot.add_cog(MyCog(bot))`.
-2. **Sync.** `bot.py` then syncs the application command tree to Discord. In dev that targets only your guild (instant); in prod it's global (slow).
-3. **Dispatch.** A user types `/buy bread 2`. Discord pushes the interaction over the gateway. discord.py routes it to `ShopCog.buy(...)` based on the registered command name.
-4. **Service call.** The cog opens a session via `async with get_session() as session:`, calls `await buy_item(session, ctx.author.id, "bread", 2)`, and waits for the result.
-5. **Persistence.** The service does its DB work on that session. The session's context manager **commits on clean exit** and **rolls back on exception** — that's how atomicity works at the cog boundary.
-6. **Reply.** The cog formats the result into a Discord message; typed errors from the service are caught and turned into friendly `ephemeral=True` replies.
-
-#### Two shapes — old (fat) vs. new (thin)
+#### Old shape (fat) vs. new shape (thin)
 
 | | Old shape | New shape |
 |---|---|---|
@@ -246,50 +330,47 @@ A **cog** is discord.py's term for a class that groups related commands. Every c
 | HTTP | `requests` (blocking) | `aiohttp` (async) |
 | Tests | Hard — Discord types in every function | Easy — services are plain Python |
 
-`cogs/economy.py` and `cogs/shop.py` are new shape. The other ~12 files in `cogs/` are still old shape and get rewritten one at a time.
+**All 22 active cogs are now new-shape.**
 
-#### Why the new cogs are still in the root `cogs/`
+### Database schema
 
-The eventual home is `src/vixen/cogs/` — everything Vixen-owned under one importable package. That move hasn't happened yet because the bot's loader currently walks the root `cogs/` directory (see `bot.py`'s `_load_cogs`). Mixing two load paths during migration adds churn for no benefit, so all cogs (new shape and old) share the same directory until the very last legacy cog migrates. At that point the loader path flips to `src/vixen/cogs/` and the root directory disappears in one commit.
+7 tables, all migrated by Alembic (4 migrations applied):
 
-So when you read **"legacy"** in this repo, it means one of two independent things:
+| Table | What it stores |
+|---|---|
+| `users` | One row per Discord account. `cash`, `bank`, `ucid`. |
+| `guilds` | Per-server settings — currently just `prefix`. |
+| `inventory_items` | UNIQUE(user, item_key) → quantity. |
+| `transactions` | Append-only audit log of every cash mutation. Indexed on `(user, created_at)`. |
+| `lottery_entries` | Tickets staked into the current lottery draw. Truncated on `/lottery draw`. |
+| `reminders` | Scheduled future DMs. `due_at` indexed alongside `fired`. |
+| `snipe_scores` | Legacy snipe-game leaderboard. Indexed on `points` for fast top-N. |
 
-- **Legacy shape** — fat cog that mixes Discord I/O, business logic, and JSON persistence. Each one rewrites individually.
-- **Legacy location** — the root `cogs/` directory. Goes away in one move once nothing legacy-shaped lives there.
+### How a cog runs end-to-end
 
-The new shop cog is **new shape, legacy location**. That's the normal mid-migration state.
-
-### Mini-game pattern
-
-Every game follows the same shape:
-
-1. Cooldown check via Redis (`SET user:N:cmd:slots EX 5 NX`).
-2. Open a Postgres session.
-3. Verify balance.
-4. Compute outcome.
-5. Update balance (single transaction: debit + credit + insert audit row).
-6. Reply.
-
-This is the same pattern as Dank Memer's economy and is well-trodden territory.
+1. **Boot** — `bot.py` walks `cogs/` and loads every `.py` as an extension via `bot.load_extension`.
+2. **Sync** — `bot.tree.sync()` ships the application command tree to Discord (per-guild in dev, global in prod).
+3. **Dispatch** — user runs `/buy bread 2`. Discord sends an interaction over the gateway → discord.py routes to `ShopCog.buy(...)`.
+4. **Cooldown check** — cog calls `try_acquire(user_id, "shop_buy")`. Redis SET NX EX in one round-trip; if locked, reply with remaining time and bail.
+5. **Service call** — cog opens `async with get_session() as session:` and invokes `await buy_item(session, user_id, "bread", 2)`.
+6. **Persistence** — service writes to Postgres on the session. Context manager **commits on clean exit**, **rolls back on exception** — that's how atomicity works at the cog boundary.
+7. **Reply** — cog formats the result; typed errors from the service get rendered as friendly `ephemeral=True` messages.
 
 ---
 
 ## Adding a feature
 
-Every cog on the new stack follows the same five-step pipeline. The shop (shipped 2026-04-30) is the most recent worked example — copy its shape:
-
-- `src/vixen/services/items.py` — static catalog
-- `src/vixen/services/shop.py` — service layer
-- `cogs/shop.py` — Discord cog
-- `tests/services/test_shop.py` — service tests
+Every cog on the new stack follows the same six-step pipeline. The shop
+(`cogs/shop.py` + `services/shop.py` + `tests/services/test_shop.py`) is
+the canonical worked example — copy its shape.
 
 ### 1. Decide where the data lives
 
 | Need | Where |
 |---|---|
-| Small fixed catalog (items, recipes, jobs, …) | Static dict in `src/vixen/services/<thing>.py`. Switch to a real DB table only when the catalog grows past ~30 entries or admins need runtime edits. |
-| Durable user state that must survive restart | New SQLAlchemy model in `src/vixen/models/`. Add to `models/__init__.py`. Generate a migration. |
-| Hot/ephemeral state — cooldowns, leaderboards, rate limits | Redis (when the Redis usage layer lands). For now, `@commands.cooldown` decorators are the placeholder. |
+| Small fixed catalog (items, recipes, jobs) | Static dict in `services/<thing>.py`. Switch to a real DB table when the catalog grows past ~30 entries or admins need runtime edits. |
+| Durable user state | New SQLAlchemy model in `models/`. Add to `models/__init__.py`. Generate a migration. |
+| Hot/ephemeral state — cooldowns, leaderboards, rate limits | Redis. Use `services/cooldown.py` for anti-spam, `services/leaderboard.py` for ZSET-based rankings. |
 
 ### 2. (Only if you added a model) Create and apply a migration
 
@@ -302,23 +383,23 @@ Inspect the generated file in `alembic/versions/` before applying — `--autogen
 
 ### 3. Write the service (`src/vixen/services/<feature>.py`)
 
-Pure-Python business logic. No Discord types in here — services are testable in plain Python.
+Pure-Python business logic. **No Discord types** — services are testable in plain Python.
 
 Conventions:
 
-1. **Take the session from the caller.** Each function accepts an `AsyncSession` so the cog decides the transaction boundary. Composing two service calls inside one `get_session()` block makes them atomic — both succeed or neither does (e.g. `buy_item` debits cash and adds inventory in one transaction).
-2. **Auto-register on first contact.** Use `get_or_create_user(session, discord_id)` so users never see a "please register first" wall.
-3. **Audit-on-write.** Every cash mutation writes a `Transaction` row. `change_cash(session, id, delta, reason="...")` does this for you — always go through it, never mutate `User.cash` directly.
-4. **Raise typed domain errors.** Define `class FooError(EconomyError)` for each failure mode (e.g. `InsufficientFunds`, `UnknownItem`, `InsufficientItems`). The cog catches these and renders friendly messages. Never let a SQLAlchemy error reach the user.
+1. **Take the session from the caller.** Each function accepts an `AsyncSession` so the cog decides the transaction boundary.
+2. **Auto-register on first contact** with `get_or_create_user(session, discord_id)`.
+3. **Audit-on-write.** Every cash mutation writes a `Transaction` row via `change_cash`.
+4. **Raise typed errors.** `class FooError(EconomyError)` per failure mode. The cog catches and renders friendly messages.
 
 ### 4. Write the cog (`cogs/<feature>.py`)
 
-A thin Discord shim: parse args, call the service, format the reply. Place new cogs at the **repo root `cogs/` directory** — that's still the active load path during the migration. Auto-discovered on next bot startup.
+Thin Discord shim: parse args, call the service, format the reply.
 
 ```python
 @commands.hybrid_command(help="One-line user-facing description.")
 @app_commands.describe(arg="What this argument is for.")
-@app_commands.choices(arg=[app_commands.Choice(name="Display", value="key"), ...])  # for fixed-set inputs
+@app_commands.choices(arg=[app_commands.Choice(name="Display", value="key"), ...])
 async def my_command(self, ctx: commands.Context, arg: str) -> None:
     # Anti-spam cooldown — escalating curve, applied per-user-per-bucket.
     remaining = await try_acquire(ctx.author.id, "my_command")
@@ -336,12 +417,11 @@ async def my_command(self, ctx: commands.Context, arg: str) -> None:
 ```
 
 Conventions:
-
-- `@commands.hybrid_command` so both slash (`/cmd`) and prefix (`!cmd`) work in one decorator.
-- User-facing errors → `ctx.reply(..., ephemeral=True)` — only the user sees them, no spam.
-- Use `<t:UNIX:R>` in embeds for relative timestamps; Discord renders them in the viewer's locale.
-- Cog `__init__` should be cheap. No DB calls, no network. Keep heavy lifting in command handlers.
-- **Cooldowns**: use `vixen.services.cooldown.try_acquire(user_id, bucket)` for any state-mutating command. The service applies a uniform escalating curve — first attempt free, then 1 s after #1, 3 s after #2, 5 s after #3 onward. The counter resets after 30 s of idle, so casual play never hits the upper end; only sustained spam plateaus at 5 s gaps. Read-only commands (`/shop`, `/inventory`, `/profile`) don't need cooldowns; Discord's own outbound rate limit handles message flooding.
+- `@commands.hybrid_command` for both slash (`/cmd`) and prefix (`!cmd`) in one decorator.
+- User-facing errors → `ctx.reply(..., ephemeral=True)`.
+- `<t:UNIX:R>` in embeds for relative timestamps; Discord renders them client-side.
+- `__init__` should be cheap — no DB calls, no network.
+- Cooldowns: free → 1s → 3s → 5s plateau, 30s idle reset. Read-only commands don't need them.
 
 End the file with:
 
@@ -352,12 +432,12 @@ async def setup(bot: commands.Bot) -> None:
 
 ### 5. Write tests (`tests/services/test_<feature>.py`)
 
-Service tests use the `db_session` fixture from `tests/conftest.py` — real Postgres on the test database, schema applied once, tables truncated between tests. No DB mocking; nothing fakes around real semantics.
+Service tests use the `db_session` fixture from `tests/conftest.py` — real
+Postgres on a separate test database, schema applied once, tables truncated
+between tests. Need Redis? Add the `redis_client` fixture too — flushes db=1
+between tests. **No mocking.**
 
-Cover at minimum:
-- Happy path
-- Each typed error path
-- Any rollback / atomicity invariant (e.g. "a failed buy must not have left an inventory row")
+Cover at minimum: happy path, each typed error path, any rollback / atomicity invariant.
 
 ```bash
 pytest tests/services/test_<feature>.py -v
@@ -369,7 +449,9 @@ pytest tests/services/test_<feature>.py -v
 .venv/bin/python3 -m vixen
 ```
 
-In your dev guild, exercise each command. Slash commands sync to the dev guild on every startup (fast). Prod uses global sync (slow, hours of propagation) — only when shipping a stable surface.
+In your dev guild, exercise each command. Slash commands sync to the dev
+guild on every startup (fast). Prod uses global sync (slow, hours of
+propagation).
 
 ### Checklist
 
@@ -377,8 +459,64 @@ In your dev guild, exercise each command. Slash commands sync to the dev guild o
 - [ ] Service module written; takes session from caller; raises typed errors
 - [ ] Cog written; `@commands.hybrid_command`; user-facing errors are `ephemeral=True`
 - [ ] Tests written and passing
-- [ ] `ruff check <new files>` clean (or matches existing project warnings)
+- [ ] `ruff check <new files>` clean
 - [ ] Smoke-tested in the dev guild
+
+---
+
+## Testing
+
+```bash
+pytest                            # full suite (~5s on a hot cache)
+pytest tests/services/test_shop.py -v
+pytest -k "leaderboard"
+```
+
+The test infrastructure:
+
+- **Real Postgres**, separate `vixen_test` database, dropped + recreated at session start.
+- **Real Redis**, db=1 (production uses db=0), flushed between tests.
+- **Per-test truncation**: every test starts on an empty database. CASCADE handles foreign keys; RESTART IDENTITY resets autoincrement sequences.
+- **No mocking**: BigInteger, ondelete=CASCADE, sorted sets, transactional rollbacks — semantics SQLite or in-memory mocks fake or break. Real semantics, real bugs.
+
+Override the test DB / Redis URLs:
+
+```bash
+TEST_DATABASE_URL="postgresql+asyncpg://user@localhost:5432/vixen_test" \
+TEST_REDIS_URL="redis://localhost:6379/1" \
+pytest
+```
+
+---
+
+## Project structure
+
+```
+vixen/
+├── pyproject.toml             # deps + tool config (ruff, mypy, pytest)
+├── docker-compose.yml         # local Postgres + Redis
+├── alembic/
+│   ├── env.py                 # async-aware migration runner
+│   └── versions/              # 4 migrations applied so far
+├── src/vixen/
+│   ├── __main__.py            # `python -m vixen` -> bot.run()
+│   ├── bot.py                 # VixenBot subclass + entrypoint
+│   ├── config.py              # pydantic-settings Settings
+│   ├── logging.py             # structlog setup
+│   ├── db.py                  # async SQLAlchemy session factory
+│   ├── cache.py               # Redis async client
+│   ├── models/                # 7 ORM tables
+│   └── services/              # business logic — 20 modules
+├── cogs/                      # 22 cogs, all new-shape
+├── scripts/                   # one-off CLI utilities
+│   ├── import_legacy_rpg.py   # legacy economy import
+│   └── import_legacy_stats.py # legacy UCID + snipe scores import
+├── tests/
+│   ├── conftest.py            # db_session + redis_client fixtures
+│   └── services/              # 154 service-layer tests
+│
+└── vixenjavascriptarchive/    # archived discord.js v13 bot from 2022
+```
 
 ---
 
@@ -386,66 +524,80 @@ In your dev guild, exercise each command. Slash commands sync to the dev guild o
 
 ### Done
 
-- [x] Cleanup: remove JS-era leftovers, fix broken refs, rotate leaked token
-- [x] Project metadata: `pyproject.toml`, `docker-compose.yml`, `.env.example`
-- [x] Source skeleton: `config.py`, `logging.py`, `db.py`, `cache.py`
-- [x] Schema: `User`, `Guild`, `InventoryItem`, `Transaction`, `LotteryEntry`, `Reminder`
-- [x] Alembic wired (env.py, ini, template) + three migrations applied
-- [x] `src/vixen/bot.py` — entrypoint with init_db / init_redis hooks, structured logging, fault-tolerant cog loader, async per-guild prefix callable
-- [x] First Alembic migration: the four base tables
-- [x] Migrate `rpg_cog` → `cogs/economy.py` (Postgres-backed `/profile`, `/work`, `/coinflip`)
-- [x] Service-layer test infrastructure (per-test Postgres DB + Redis db=1, truncate-between-tests, soft-fail when Redis isn't initialized)
-- [x] Shop / inventory commands (`/shop`, `/buy`, `/sell`, `/inventory`, `has_item` primitive)
-- [x] Redis-backed escalating cooldowns (`services/cooldown.py`; 1s/3s/5s curve, 30s idle reset; wired into every mutating command)
-- [x] `/use` consumables loop + effect-handler registry (bread, coffee)
-- [x] Redis-backed wealth leaderboard (sorted set; auto-syncs from `change_cash`; `/leaderboard top` + `/leaderboard rank`)
-- [x] Replace `print` with `structlog` everywhere active
-- [x] Mini-games: `/dice` (2d6 with 10x jackpots) + `/slots` (3-reel, 25x jackpot)
-- [x] Fishing cog (`/fish`, weighted catch table, durable rod)
-- [x] Lottery cog (`/lottery enter`, `/lottery pool`, `/lottery draw` admin) with new `lottery_entries` table
-- [x] Robbery cog (`/rob` with 50/50 odds, padlock defense, 10% failure penalty)
-- [x] Reminders cog (`/remind set/list/cancel`) with new `reminders` table and 30-second background poller
-- [x] Migrate prefix lookup → `Guild` row + Redis cache (`services/prefix.py`); `/setprefix` admin command
-- [x] Migrate `fin_cog` → thin cog over `services/finance` + `services/charts`. Async yfinance via `asyncio.to_thread`, dark theme, 150 DPI, in-memory PNGs, no Python.app window
-- [x] `/chart` with interactive timeframe buttons, `/candles`, MACD, Bollinger Bands, `/compare`
-- [x] Weather cog (`/weather`, `/forecast`) backed by Open-Meteo (no API key)
-- [x] Migrate `help_cog` to new shape with explicit category grouping
-- [x] Delete orphaned `data/rpg.json` (economy fully migrated)
-- [x] Migrate `avatar_cog` (was broken — function wasn't decorated as a command)
-- [x] Migrate `modal_cog` (drop missing `xiao.jpg`, structlog)
-- [x] Migrate `utility` — `/dog` + `/echo` over shared aiohttp session in `services/http.py`
-- [x] Migrate `doge_cog` — Agg backend + in-memory PNG, fix `timeout=0` bug, defensive parse
-- [x] Migrate `admin` — drop duplicate `change_prefix`, modernize `/sync` (guild/global), add `/reload-cog`, `/debug-commands`
-- [x] Migrate `moderation` — typed Discord errors, structlog audit, result embeds
-- [x] Migrate `view_cog` — drop `/menu` demo, improve `/rps` with optional cash wager via `change_cash`
-- [x] Migrate `attendance` — UCID moves to `users.ucid`; modal flow rewritten thin
-- [x] Migrate `snipe_cog` — points move to `snipe_scores` table; paginated view rewritten with one `_NavButton` class instead of five subclasses
-- [x] One-shot import script `scripts/import_legacy_stats.py` for migrating UCIDs + snipe scores from the legacy JSON
-- [x] Drop `bot.legacy_data` / `bot.legacy_stats2` aliases — bot is now JSON-free at runtime
-- [x] Delete `main.py` (legacy entrypoint) and `data/stats2.json` (orphaned)
+<details>
+<summary>Foundation (click to expand)</summary>
 
-### Deferred (and why)
+- [x] Project metadata, source skeleton, structlog logging, async SQLAlchemy, Redis client
+- [x] Schema: User, Guild, InventoryItem, Transaction, LotteryEntry, Reminder, SnipeScore
+- [x] Alembic — 4 migrations applied
+- [x] `bot.py` entrypoint with init_db / init_redis hooks, fault-tolerant cog loader, async per-guild prefix callable
+- [x] Service-layer test infrastructure — per-test Postgres DB + Redis db=1, soft-fail without Redis
+- [x] Redis-backed escalating cooldowns (1s → 3s → 5s plateau, 30s idle reset)
 
-- [ ] **Tests with `dpytest`** — Discord-side interaction tests. Substantial harness setup; 154 service-layer tests already cover the business logic. Worth doing once the cog surface stabilizes.
-- [ ] **Production deploy notes (systemd unit, log shipping)** — needs hosting decisions (Render? Fly.io? VPS?).
+</details>
 
-### Maybe
+<details>
+<summary>Features</summary>
 
-- Buff system: `/use` currently emits flavor text. The handler signature already takes `session` + `user_id`, so adding a "well-fed +50% next /work payout" buff is a Redis-backed temporary key away.
+- [x] Economy — `/profile`, `/work`, `/coinflip`
+- [x] Shop & inventory — `/shop`, `/buy`, `/sell`, `/inventory`, `/use` (with effect-handler registry)
+- [x] Leaderboard — Redis ZSET, `/leaderboard top` and `/leaderboard rank`, auto-syncs from `change_cash`
+- [x] Mini-games — `/dice`, `/slots`, `/rps` (with optional cash wager)
+- [x] Fishing — `/fish` with weighted catch table; durable rod
+- [x] Lottery — `/lottery enter`/`pool`/`draw`, weighted random winner, dedicated table
+- [x] Robbery — `/rob` with 50/50 odds, padlock defense, 10 % failure penalty
+- [x] Reminders — `/remind set`/`list`/`cancel` with 30s background poller
+- [x] Per-guild prefix — Postgres + Redis cache, `/setprefix` admin command
+- [x] Finance — async yfinance, dark theme, 150 DPI in-memory PNGs
+- [x] `/chart` with interactive timeframe buttons + chart-type selector
+- [x] `/candles`, `/rsi`, `/moving_average`, MACD, Bollinger Bands, `/compare`
+- [x] Weather — `/weather` and `/forecast` via Open-Meteo (no API key)
+- [x] Help — category-grouped overview + per-command detail
+- [x] Admin — `/sync`, `/reload-cog`, `/debug-commands`
+- [x] Moderation — typed error handling + structured audit log
+
+</details>
+
+<details>
+<summary>Migration sweep</summary>
+
+- [x] Migrate `rpg_cog` → `cogs/economy.py`
+- [x] Migrate `attendance` → uses `users.ucid`
+- [x] Migrate `snipe_cog` → uses `snipe_scores` table
+- [x] Migrate `fin_cog`, `help_cog`, `avatar_cog`, `modal_cog`, `utility`, `doge_cog`, `admin`, `moderation`, `view_cog`
+- [x] Replace blocking `requests` with `aiohttp` (or `to_thread` where the upstream lib is sync — yfinance)
+- [x] Replace `print` with `structlog` everywhere
+- [x] Delete orphaned legacy files: `data/rpg.json`, `data/stats2.json`, `main.py`, `prefixes.json` (gitignored)
+- [x] Drop `bot.legacy_data` / `bot.legacy_stats2` aliases — bot is JSON-free at runtime
+
+</details>
+
+### Deferred
+
+- [ ] **Tests with `dpytest`** — Discord-side interaction tests. 154 service-layer tests already cover the business logic; dpytest worth doing once the cog surface stabilizes.
+- [ ] **Production deploy notes** — needs a hosting decision (Render? Fly.io? VPS?). Once chosen: systemd unit, log shipping config, deploy runbook.
+
+### Maybe / future
+
+- Buff system: `/use` currently emits flavor text. The handler signature already takes `session` + `user_id`, so adding "well-fed +50 % next /work payout" via a Redis temp key is a small change.
 - Auto-draw lottery: weekly cron task that calls `services.lottery.draw` without admin invocation.
-- Guild settings: extend `Guild` model for disabled commands, mod-log channel, welcome message.
-- Indicator-switching dropdown on `/chart` (alongside the timeframe buttons) so users can flip RSI ↔ MACD ↔ Bollinger without re-running.
-- News / earnings commands via yfinance's other endpoints.
-- `/options` chain viewer (yfinance has it).
+- Indicator-switching dropdown on `/chart` alongside the timeframe buttons.
+- News / earnings / options-chain commands via yfinance's other endpoints.
+- Multi-server snipe leaderboards via `/snipe-add-points` admin command.
 
 ---
 
-## Deploying (forthcoming)
+## License
 
-Production runs on a small VPS:
+**UNLICENSED. Personal use only. Repo is private.**
 
-- Postgres + Redis: managed (Render / Neon / Upstash) or co-located.
-- Bot: a `systemd` unit that runs `python -m vixen`, restarts on crash, ships stdout to journald.
-- Logs: `structlog` JSON output → `journalctl` → optionally forwarded to a log aggregator.
+This bot is built for self-hosting on the author's own servers. The code is
+not licensed for redistribution, derivative works, or commercial use.
 
-Detailed runbook will live in `docs/DEPLOY.md` once the new `bot.py` is wired.
+---
+
+<div align="center">
+
+Built with ❤️ and a lot of `async with`.
+
+</div>
