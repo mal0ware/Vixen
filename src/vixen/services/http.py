@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import aiohttp
 
-
 _session: aiohttp.ClientSession | None = None
 
 
