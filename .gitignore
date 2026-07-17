@@ -42,3 +42,6 @@ Thumbs.db
 # --- Logs / pids ---
 *.log
 *.pid
+
+# --- Node (legacy JS archive) ---
+node_modules/
