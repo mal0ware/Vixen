@@ -14,7 +14,7 @@ notes) layered on top.
 [![Postgres](https://img.shields.io/badge/postgres-16-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/redis-7-DC382D?logo=redis&logoColor=white)](https://redis.io/)
 [![Style: ruff](https://img.shields.io/badge/style-ruff-FCC21B)](https://docs.astral.sh/ruff/)
-[![License](https://img.shields.io/badge/license-personal%20use-orange)](#license)
+[![License](https://img.shields.io/badge/license-MIT-3FB950)](#license)
 
 [![Commands](https://img.shields.io/badge/slash--commands-38-7289DA)](#commands)
 [![Cogs](https://img.shields.io/badge/cogs-22-7289DA)](#project-structure)
@@ -589,10 +589,10 @@ vixen/
 
 ## License
 
-**UNLICENSED. Personal use only. Repo is private.**
+**MIT** — see [LICENSE](LICENSE).
 
-This bot is built for self-hosting on the author's own servers. The code is
-not licensed for redistribution, derivative works, or commercial use.
+This bot is built for self-hosting on the author's own servers, but the code
+is free to read, fork, and reuse under the MIT terms.
 
 ---
 

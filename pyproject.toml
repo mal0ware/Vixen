@@ -5,7 +5,7 @@ description = "Personal Discord assistant + economy / mini-game bot"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Marius Castillo", email = "mal0ss.network@gmail.com" }]
-license = { text = "UNLICENSED" }
+license = { text = "MIT" }
 
 # Runtime dependencies. Pinned with lower bounds; install resolves the latest
 # compatible. Run `pip install -e ".[dev]"` for the full dev environment.
