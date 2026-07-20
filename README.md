@@ -9,6 +9,7 @@ Inspired by [Dank Memer](https://dankmemer.lol/) for the economy pattern, with
 first-class personal-assistant features (finance charts, reminders, weather,
 notes) layered on top.
 
+[![CI](https://github.com/mal0ware/Vixen/actions/workflows/ci.yml/badge.svg)](https://github.com/mal0ware/Vixen/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.12+-3776AB?logo=python&logoColor=white)](#)
 [![discord.py](https://img.shields.io/badge/discord.py-2.x-5865F2?logo=discord&logoColor=white)](https://discordpy.readthedocs.io/)
 [![Postgres](https://img.shields.io/badge/postgres-16-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
