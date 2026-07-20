@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vixen.models import User
-from vixen.services.fishing import CATCH_TABLE, NoRod, _pick_catch, do_fish
+from vixen.services.fishing import CATCH_TABLE, NoRodError, _pick_catch, do_fish
 from vixen.services.shop import add_item
 
 # ---------------------------------------------------------------- #
@@ -61,7 +61,7 @@ async def test_do_fish_audit_log_reason(db_session: AsyncSession):
 
 async def test_do_fish_raises_norod_when_no_rod(db_session: AsyncSession):
     """A user without a rod can't fish."""
-    with pytest.raises(NoRod):
+    with pytest.raises(NoRodError):
         await do_fish(db_session, 42)
 
 
@@ -71,7 +71,7 @@ async def test_norod_does_not_create_transaction(db_session: AsyncSession):
 
     from vixen.models import Transaction
 
-    with pytest.raises(NoRod):
+    with pytest.raises(NoRodError):
         await do_fish(db_session, 42)
 
     txs = (await db_session.execute(select(Transaction))).scalars().all()

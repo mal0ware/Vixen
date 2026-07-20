@@ -139,8 +139,8 @@ def compute_macd(
 ) -> pd.DataFrame:
     """Add MACD, MACD_SIGNAL, MACD_HIST columns.
 
-    MACD = EMA(fast) − EMA(slow), where EMA is exponentially-weighted.
-    Signal = EMA(MACD, signal). Histogram = MACD − Signal — the bar chart
+    MACD = EMA(fast) - EMA(slow), where EMA is exponentially-weighted.
+    Signal = EMA(MACD, signal). Histogram = MACD - Signal — the bar chart
     that traders watch for crossovers.
 
     The 12/26/9 default is the textbook setup (Appel's original). EMA
@@ -162,8 +162,8 @@ def compute_bollinger(
 ) -> pd.DataFrame:
     """Add BB_MID, BB_UPPER, BB_LOWER columns.
 
-    Middle = SMA(window). Upper/Lower = middle ± num_std × rolling stddev.
-    20-period and 2σ is the textbook Bollinger configuration (~95% of
+    Middle = SMA(window). Upper/Lower = middle ± num_std * rolling stddev.
+    20-period and 2-sigma is the textbook Bollinger configuration (~95% of
     samples expected inside the band under a normal distribution).
 
     Touching the upper band is conventionally a "stretched-up" signal,

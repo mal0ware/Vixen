@@ -3,7 +3,7 @@
 Outcomes (all decided server-side in `services.robbery.do_rob`):
 - target had a padlock → blocked, padlock consumed
 - 50/50 success roll on remaining attempts:
-    - succeeded → steal 10–25% of target's cash
+    - succeeded → steal 10-25% of target's cash
     - failed    → lose 10% of your own as penalty
 
 Validation lives here, not in the service:
@@ -18,7 +18,7 @@ from discord.ext import commands
 
 from vixen.db import get_session
 from vixen.services.cooldown import try_acquire
-from vixen.services.robbery import TargetBroke, do_rob
+from vixen.services.robbery import TargetBrokeError, do_rob
 
 
 class RobberyCog(commands.Cog):
@@ -54,7 +54,7 @@ class RobberyCog(commands.Cog):
         try:
             async with get_session() as session:
                 result = await do_rob(session, ctx.author.id, target.id)
-        except TargetBroke:
+        except TargetBrokeError:
             await ctx.reply(
                 f"{target.display_name} has nothing worth stealing.",
                 ephemeral=True,

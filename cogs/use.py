@@ -15,12 +15,12 @@ from discord.ext import commands
 from vixen.db import get_session
 from vixen.services.cooldown import try_acquire
 from vixen.services.items import ITEMS
-from vixen.services.shop import InsufficientItems, UnknownItem
-from vixen.services.use import NotConsumable, consume_item
+from vixen.services.shop import InsufficientItemsError, UnknownItemError
+from vixen.services.use import NotConsumableError, consume_item
 
 # Built once at import. Only items with an effect are eligible for /use,
 # so the dropdown matches what the command can actually do — no need to
-# render "fishing_rod" then reject it with NotConsumable.
+# render "fishing_rod" then reject it with NotConsumableError.
 _USABLE_CHOICES: list[app_commands.Choice[str]] = [
     app_commands.Choice(name=f"{item.emoji} {item.name}", value=item.key)
     for item in ITEMS.values()
@@ -51,10 +51,10 @@ class UseCog(commands.Cog):
         try:
             async with get_session() as session:
                 flavor = await consume_item(session, ctx.author.id, item)
-        except UnknownItem:
+        except UnknownItemError:
             await ctx.reply(f"No item with key `{item}`.", ephemeral=True)
             return
-        except NotConsumable:
+        except NotConsumableError:
             # Reachable only if a non-consumable slipped through (manual
             # invocation or someone editing the choices list). The slash
             # dropdown filters these out, so this is defense-in-depth.
@@ -63,7 +63,7 @@ class UseCog(commands.Cog):
                 ephemeral=True,
             )
             return
-        except InsufficientItems as e:
+        except InsufficientItemsError as e:
             await ctx.reply(
                 f"You don't have any `{e.item_key}` to use.", ephemeral=True
             )

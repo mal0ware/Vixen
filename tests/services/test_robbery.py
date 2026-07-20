@@ -18,7 +18,7 @@ from vixen.services.robbery import (
     FAILURE_PENALTY_PCT,
     STEAL_PCT_MAX,
     STEAL_PCT_MIN,
-    TargetBroke,
+    TargetBrokeError,
     do_rob,
 )
 from vixen.services.shop import add_item, has_item
@@ -46,17 +46,17 @@ async def test_padlock_blocks_and_is_consumed(
 async def test_padlock_check_runs_before_target_balance(
     db_session: AsyncSession, redis_client
 ):
-    """Edge case: target has padlock AND zero cash → TargetBroke wins.
+    """Edge case: target has padlock AND zero cash → TargetBrokeError wins.
 
     We reject the rob before consuming the padlock — otherwise a target
     could lose a 2,500-cash padlock blocking a 0-cash rob.
     """
     await add_item(db_session, 2, "padlock", 1)
 
-    with pytest.raises(TargetBroke):
+    with pytest.raises(TargetBrokeError):
         await do_rob(db_session, thief_id=1, target_id=2)
 
-    # Padlock NOT consumed — TargetBroke fired first.
+    # Padlock NOT consumed — TargetBrokeError fired first.
     assert await has_item(db_session, 2, "padlock")
 
 
@@ -135,7 +135,7 @@ async def test_failed_rob_with_no_thief_cash_is_zero_penalty(
 
 
 # ---------------------------------------------------------------- #
-# TargetBroke
+# TargetBrokeError
 # ---------------------------------------------------------------- #
 
 
@@ -144,5 +144,5 @@ async def test_target_with_no_cash_raises(db_session: AsyncSession, redis_client
     await change_cash(db_session, 1, 1000, reason="seed")  # thief has cash
     # target user 2 doesn't exist yet; do_rob auto-creates with cash=0
 
-    with pytest.raises(TargetBroke):
+    with pytest.raises(TargetBrokeError):
         await do_rob(db_session, thief_id=1, target_id=2)

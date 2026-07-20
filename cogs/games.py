@@ -11,7 +11,7 @@ Pattern matches /coinflip:
 
 Both commands debit the wager up front via change_cash with a negative
 delta — that fails fast if the player can't afford it (raises
-InsufficientFunds, which we render). On a win, we credit the gross payout
+InsufficientFundsError, which we render). On a win, we credit the gross payout
 back. The session boundary makes both halves atomic: if anything between
 debit and credit raises, the wager is refunded automatically.
 
@@ -25,7 +25,7 @@ from discord.ext import commands
 
 from vixen.db import get_session
 from vixen.services.cooldown import try_acquire
-from vixen.services.economy import InsufficientFunds, change_cash
+from vixen.services.economy import InsufficientFundsError, change_cash
 
 # Slots reel composition. Five distinct symbols, equally weighted, three
 # reels. Probability of three-of-a-kind = 5/125 = 4%. Anything less than
@@ -97,7 +97,7 @@ class GamesCog(commands.Cog):
 
                     user = await get_or_create_user(session, ctx.author.id)
                     new_balance = user.cash
-        except InsufficientFunds as e:
+        except InsufficientFundsError as e:
             await ctx.reply(
                 f"You only have **{e.have:,}** cash — can't wager **{wager:,}**.",
                 ephemeral=True,
@@ -150,7 +150,7 @@ class GamesCog(commands.Cog):
                 new_balance = await change_cash(
                     session, ctx.author.id, delta, reason=reason
                 )
-        except InsufficientFunds as e:
+        except InsufficientFundsError as e:
             await ctx.reply(
                 f"You only have **{e.have:,}** cash — can't wager **{wager:,}**.",
                 ephemeral=True,

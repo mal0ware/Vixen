@@ -64,7 +64,7 @@ CATCH_TABLE: tuple[Catch, ...] = (
 # --------------------------------------------------------------------------- #
 
 
-class NoRod(EconomyError):
+class NoRodError(EconomyError):
     """User attempted /fish without a fishing_rod in their inventory."""
 
 
@@ -92,13 +92,13 @@ async def do_fish(
     """Cast once. Returns (catch, new_balance).
 
     Raises:
-        NoRod: user doesn't own a fishing_rod.
+        NoRodError: user doesn't own a fishing_rod.
 
     The rod is NOT consumed. Each cast goes to change_cash so the catch is
     audit-logged (`reason="fish_<catch_name>"`) and the leaderboard updates.
     """
     if not await has_item(session, user_id, "fishing_rod"):
-        raise NoRod("user has no fishing_rod")
+        raise NoRodError("user has no fishing_rod")
 
     catch = _pick_catch(rng)
     # Snake-case the catch name for the audit reason. Old boot → "fish_old_boot".

@@ -17,7 +17,7 @@ from vixen.db import get_session
 from vixen.models import InventoryItem
 from vixen.services.cooldown import try_acquire
 from vixen.services.economy import (
-    InsufficientFunds,
+    InsufficientFundsError,
     change_cash,
     get_or_create_user,
 )
@@ -71,7 +71,7 @@ class EconomyCog(commands.Cog):
     # /work
     # ---------------------------------------------------------------- #
 
-    @commands.hybrid_command(help="Earn 25–125 cash.")
+    @commands.hybrid_command(help="Earn 25-125 cash.")
     async def work(self, ctx: commands.Context) -> None:
         remaining = await try_acquire(ctx.author.id, "work")
         if remaining > 0:
@@ -118,7 +118,7 @@ class EconomyCog(commands.Cog):
                 new_balance = await change_cash(
                     session, ctx.author.id, delta, reason=reason
                 )
-        except InsufficientFunds as e:
+        except InsufficientFundsError as e:
             await ctx.reply(
                 f"You only have **{e.have:,}** cash — can't wager **{wager:,}**.",
                 ephemeral=True,

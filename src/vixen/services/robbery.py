@@ -80,7 +80,7 @@ class RobResult:
 # --------------------------------------------------------------------------- #
 
 
-class TargetBroke(EconomyError):
+class TargetBrokeError(EconomyError):
     """Target has zero cash — nothing worth stealing."""
 
 
@@ -99,7 +99,7 @@ async def do_rob(
     """Run one robbery attempt. See module docstring for outcomes.
 
     Raises:
-        TargetBroke: target has 0 cash, nothing to steal. We reject before
+        TargetBrokeError: target has 0 cash, nothing to steal. We reject before
             consuming the target's padlock — defense-in-depth so the
             target doesn't lose a 2500-cash padlock blocking a 0-cash rob.
     """
@@ -110,7 +110,7 @@ async def do_rob(
     target = await get_or_create_user(session, target_id)
 
     if target.cash <= 0:
-        raise TargetBroke("target has nothing to steal")
+        raise TargetBrokeError("target has nothing to steal")
 
     # Defense check: padlock blocks one rob, then is consumed. The check
     # runs BEFORE the success roll, so the rng position is still

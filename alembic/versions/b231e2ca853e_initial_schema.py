@@ -1,21 +1,20 @@
 """initial schema
 
 Revision ID: b231e2ca853e
-Revises: 
+Revises:
 Create Date: 2026-04-27 03:32:34.364712+00:00
 
 """
-from typing import Sequence, Union
+from collections.abc import Sequence
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'b231e2ca853e'
-down_revision: Union[str, None] = None
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = None
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -46,7 +45,10 @@ def upgrade() -> None:
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('user_discord_id', 'item_key', name='uq_user_item')
     )
-    op.create_index(op.f('ix_inventory_items_user_discord_id'), 'inventory_items', ['user_discord_id'], unique=False)
+    op.create_index(
+        op.f('ix_inventory_items_user_discord_id'), 'inventory_items',
+        ['user_discord_id'], unique=False,
+    )
     op.create_table('transactions',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('user_discord_id', sa.BigInteger(), nullable=False),
@@ -56,8 +58,14 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['user_discord_id'], ['users.discord_id'], ondelete='CASCADE'),
     sa.PrimaryKeyConstraint('id')
     )
-    op.create_index(op.f('ix_transactions_created_at'), 'transactions', ['created_at'], unique=False)
-    op.create_index(op.f('ix_transactions_user_discord_id'), 'transactions', ['user_discord_id'], unique=False)
+    op.create_index(
+        op.f('ix_transactions_created_at'), 'transactions',
+        ['created_at'], unique=False,
+    )
+    op.create_index(
+        op.f('ix_transactions_user_discord_id'), 'transactions',
+        ['user_discord_id'], unique=False,
+    )
     # ### end Alembic commands ###
 
 

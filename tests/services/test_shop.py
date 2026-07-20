@@ -13,14 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vixen.models import InventoryItem, Transaction, User
 from vixen.services.economy import (
-    InsufficientFunds,
-    InvalidAmount,
+    InsufficientFundsError,
+    InvalidAmountError,
     change_cash,
 )
 from vixen.services.items import ITEMS
 from vixen.services.shop import (
-    InsufficientItems,
-    UnknownItem,
+    InsufficientItemsError,
+    UnknownItemError,
     add_item,
     buy_item,
     list_inventory,
@@ -70,14 +70,14 @@ async def test_add_item_auto_registers_user(db_session: AsyncSession):
 
 
 async def test_add_item_rejects_unknown_item(db_session: AsyncSession):
-    with pytest.raises(UnknownItem):
+    with pytest.raises(UnknownItemError):
         await add_item(db_session, 42, "fnord", 1)
 
 
 async def test_add_item_rejects_non_positive_qty(db_session: AsyncSession):
-    with pytest.raises(InvalidAmount):
+    with pytest.raises(InvalidAmountError):
         await add_item(db_session, 42, "bread", 0)
-    with pytest.raises(InvalidAmount):
+    with pytest.raises(InvalidAmountError):
         await add_item(db_session, 42, "bread", -1)
 
 
@@ -110,7 +110,7 @@ async def test_remove_item_deletes_row_when_zero(db_session: AsyncSession):
 async def test_remove_item_raises_when_insufficient(db_session: AsyncSession):
     await add_item(db_session, 42, "bread", 2)
 
-    with pytest.raises(InsufficientItems) as exc:
+    with pytest.raises(InsufficientItemsError) as exc:
         await remove_item(db_session, 42, "bread", 5)
 
     assert exc.value.item_key == "bread"
@@ -120,13 +120,13 @@ async def test_remove_item_raises_when_insufficient(db_session: AsyncSession):
 
 async def test_remove_item_raises_when_user_owns_none(db_session: AsyncSession):
     """Removing from an empty (or absent) inventory raises with have=0."""
-    with pytest.raises(InsufficientItems) as exc:
+    with pytest.raises(InsufficientItemsError) as exc:
         await remove_item(db_session, 42, "bread", 1)
     assert exc.value.have == 0
 
 
 async def test_remove_item_rejects_non_positive_qty(db_session: AsyncSession):
-    with pytest.raises(InvalidAmount):
+    with pytest.raises(InvalidAmountError):
         await remove_item(db_session, 42, "bread", 0)
 
 
@@ -192,7 +192,7 @@ async def test_buy_item_insufficient_funds_writes_nothing(db_session: AsyncSessi
     """A failed buy leaves cash AND inventory untouched."""
     await change_cash(db_session, 42, 10, reason="seed")  # bread costs 50
 
-    with pytest.raises(InsufficientFunds):
+    with pytest.raises(InsufficientFundsError):
         await buy_item(db_session, 42, "bread", 1)
 
     user = await db_session.get(User, 42)
@@ -208,13 +208,13 @@ async def test_buy_item_insufficient_funds_writes_nothing(db_session: AsyncSessi
 
 async def test_buy_item_unknown_item_raises(db_session: AsyncSession):
     await change_cash(db_session, 42, 1000, reason="seed")
-    with pytest.raises(UnknownItem):
+    with pytest.raises(UnknownItemError):
         await buy_item(db_session, 42, "fnord", 1)
 
 
 async def test_buy_item_rejects_non_positive_qty(db_session: AsyncSession):
     await change_cash(db_session, 42, 1000, reason="seed")
-    with pytest.raises(InvalidAmount):
+    with pytest.raises(InvalidAmountError):
         await buy_item(db_session, 42, "bread", 0)
 
 
@@ -239,12 +239,12 @@ async def test_sell_item_decrements_inventory_and_credits_cash(db_session: Async
 
 
 async def test_sell_item_insufficient_items(db_session: AsyncSession):
-    with pytest.raises(InsufficientItems):
+    with pytest.raises(InsufficientItemsError):
         await sell_item(db_session, 42, "bread", 1)
 
 
 async def test_sell_item_unknown_item_raises(db_session: AsyncSession):
-    with pytest.raises(UnknownItem):
+    with pytest.raises(UnknownItemError):
         await sell_item(db_session, 42, "fnord", 1)
 
 

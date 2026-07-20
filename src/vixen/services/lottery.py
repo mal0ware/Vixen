@@ -38,7 +38,7 @@ from .shop import remove_item
 # --------------------------------------------------------------------------- #
 
 
-class NoEntries(EconomyError):
+class NoEntriesError(EconomyError):
     """/lottery draw called with zero entries — nothing to draw against."""
 
 
@@ -58,15 +58,15 @@ async def enter(
     inventory).
 
     Raises:
-        InvalidAmount: count <= 0.
-        InsufficientItems: user owns fewer than `count` lottery_tickets.
+        InvalidAmountError: count <= 0.
+        InsufficientItemsError: user owns fewer than `count` lottery_tickets.
     """
     if count <= 0:
-        from .economy import InvalidAmount
-        raise InvalidAmount(f"count must be positive, got {count}")
+        from .economy import InvalidAmountError
+        raise InvalidAmountError(f"count must be positive, got {count}")
 
     # Burn the tickets from inventory first. If they don't have them,
-    # InsufficientItems propagates and we never touch lottery state.
+    # InsufficientItemsError propagates and we never touch lottery state.
     await remove_item(session, user_id, "lottery_ticket", qty=count)
 
     # UPSERT the LotteryEntry row — the model's PK is user_discord_id, so
@@ -103,7 +103,7 @@ async def draw(
     Returns (winner_id, pot_won, total_entries_in_draw).
 
     Raises:
-        NoEntries: nobody has staked anything yet.
+        NoEntriesError: nobody has staked anything yet.
     """
     rng = rng or random
 
@@ -113,7 +113,7 @@ async def draw(
         )
     ).all()
     if not rows:
-        raise NoEntries("nobody is in the current draw")
+        raise NoEntriesError("nobody is in the current draw")
 
     user_ids = [r[0] for r in rows]
     weights = [r[1] for r in rows]

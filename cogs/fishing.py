@@ -9,7 +9,7 @@ from discord.ext import commands
 
 from vixen.db import get_session
 from vixen.services.cooldown import try_acquire
-from vixen.services.fishing import NoRod, do_fish
+from vixen.services.fishing import NoRodError, do_fish
 
 
 class FishingCog(commands.Cog):
@@ -32,7 +32,7 @@ class FishingCog(commands.Cog):
         try:
             async with get_session() as session:
                 catch, new_balance = await do_fish(session, ctx.author.id)
-        except NoRod:
+        except NoRodError:
             await ctx.reply(
                 "You don't have a `fishing_rod`. Buy one with `/buy fishing_rod`.",
                 ephemeral=True,

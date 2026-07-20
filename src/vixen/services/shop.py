@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import InventoryItem
-from .economy import EconomyError, InvalidAmount, change_cash, get_or_create_user
+from .economy import EconomyError, InvalidAmountError, change_cash, get_or_create_user
 from .items import ITEMS
 
 # --------------------------------------------------------------------------- #
@@ -24,7 +24,7 @@ from .items import ITEMS
 # --------------------------------------------------------------------------- #
 
 
-class UnknownItem(EconomyError):
+class UnknownItemError(EconomyError):
     """Caller passed an item_key that isn't in the catalog."""
 
     def __init__(self, item_key: str):
@@ -32,7 +32,7 @@ class UnknownItem(EconomyError):
         super().__init__(f"unknown item: {item_key}")
 
 
-class InsufficientItems(EconomyError):
+class InsufficientItemsError(EconomyError):
     """User attempted to remove more of an item than they own."""
 
     def __init__(self, *, item_key: str, have: int, need: int):
@@ -72,9 +72,9 @@ async def add_item(
     player ever receives doesn't 500 on a missing users row.
     """
     if item_key not in ITEMS:
-        raise UnknownItem(item_key)
+        raise UnknownItemError(item_key)
     if qty <= 0:
-        raise InvalidAmount(f"qty must be positive, got {qty}")
+        raise InvalidAmountError(f"qty must be positive, got {qty}")
 
     await get_or_create_user(session, discord_id)
 
@@ -103,12 +103,12 @@ async def remove_item(
     lets a future buy re-create cleanly.
     """
     if qty <= 0:
-        raise InvalidAmount(f"qty must be positive, got {qty}")
+        raise InvalidAmountError(f"qty must be positive, got {qty}")
 
     row = await _get_row(session, discord_id, item_key)
     have = row.quantity if row is not None else 0
     if have < qty:
-        raise InsufficientItems(item_key=item_key, have=have, need=qty)
+        raise InsufficientItemsError(item_key=item_key, have=have, need=qty)
 
     # row is guaranteed non-None here: have >= qty > 0.
     assert row is not None
@@ -176,19 +176,19 @@ async def buy_item(
     Returns (total_cost, new_cash_balance, new_qty_owned).
 
     Raises:
-        UnknownItem: item_key not in catalog.
-        InvalidAmount: qty <= 0.
-        InsufficientFunds: user can't afford `price * qty`.
+        UnknownItemError: item_key not in catalog.
+        InvalidAmountError: qty <= 0.
+        InsufficientFundsError: user can't afford `price * qty`.
     """
     if item_key not in ITEMS:
-        raise UnknownItem(item_key)
+        raise UnknownItemError(item_key)
     if qty <= 0:
-        raise InvalidAmount(f"qty must be positive, got {qty}")
+        raise InvalidAmountError(f"qty must be positive, got {qty}")
 
     item = ITEMS[item_key]
     cost = item.price * qty
 
-    # Debit first so InsufficientFunds short-circuits before we touch
+    # Debit first so InsufficientFundsError short-circuits before we touch
     # inventory. If add_item somehow fails afterwards, the caller's
     # session ctx rolls the debit back too.
     new_balance = await change_cash(
@@ -209,14 +209,14 @@ async def sell_item(
     Returns (total_payout, new_cash_balance, new_qty_owned).
 
     Raises:
-        UnknownItem: item_key not in catalog.
-        InvalidAmount: qty <= 0.
-        InsufficientItems: user owns fewer than `qty` of the item.
+        UnknownItemError: item_key not in catalog.
+        InvalidAmountError: qty <= 0.
+        InsufficientItemsError: user owns fewer than `qty` of the item.
     """
     if item_key not in ITEMS:
-        raise UnknownItem(item_key)
+        raise UnknownItemError(item_key)
     if qty <= 0:
-        raise InvalidAmount(f"qty must be positive, got {qty}")
+        raise InvalidAmountError(f"qty must be positive, got {qty}")
 
     item = ITEMS[item_key]
 

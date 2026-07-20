@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vixen.models import Transaction, User
 from vixen.services.economy import (
-    InsufficientFunds,
-    InvalidAmount,
+    InsufficientFundsError,
+    InvalidAmountError,
     change_cash,
     get_or_create_user,
 )
@@ -145,7 +145,7 @@ async def test_change_cash_auto_registers_unknown_user(db_session: AsyncSession)
 
 async def test_change_cash_zero_delta_raises_invalid_amount(db_session: AsyncSession):
     """delta=0 is a bug, not a silent no-op."""
-    with pytest.raises(InvalidAmount):
+    with pytest.raises(InvalidAmountError):
         await change_cash(db_session, 42, 0, reason="oops")
 
 
@@ -153,7 +153,7 @@ async def test_change_cash_overdraft_raises_insufficient_funds(db_session: Async
     """Negative delta exceeding balance raises with `have` and `need`."""
     await change_cash(db_session, 42, 50, reason="work")  # balance: 50
 
-    with pytest.raises(InsufficientFunds) as exc_info:
+    with pytest.raises(InsufficientFundsError) as exc_info:
         await change_cash(db_session, 42, -100, reason="coinflip_loss")
 
     assert exc_info.value.have == 50
@@ -164,7 +164,7 @@ async def test_change_cash_overdraft_does_not_mutate_balance(db_session: AsyncSe
     """A failed change_cash must not have changed cash OR written an audit row."""
     await change_cash(db_session, 42, 50, reason="work")
 
-    with pytest.raises(InsufficientFunds):
+    with pytest.raises(InsufficientFundsError):
         await change_cash(db_session, 42, -100, reason="bad_bet")
 
     # Balance unchanged from the successful first call.

@@ -13,11 +13,11 @@ from discord.ext import commands
 
 from vixen.db import get_session
 from vixen.services.cooldown import try_acquire
-from vixen.services.economy import InsufficientFunds
+from vixen.services.economy import InsufficientFundsError
 from vixen.services.items import ITEMS
 from vixen.services.shop import (
-    InsufficientItems,
-    UnknownItem,
+    InsufficientItemsError,
+    UnknownItemError,
     buy_item,
     list_inventory,
     sell_item,
@@ -93,10 +93,10 @@ class ShopCog(commands.Cog):
                 cost, new_balance, new_qty = await buy_item(
                     session, ctx.author.id, item, qty
                 )
-        except UnknownItem:
+        except UnknownItemError:
             await ctx.reply(f"No item with key `{item}`.", ephemeral=True)
             return
-        except InsufficientFunds as e:
+        except InsufficientFundsError as e:
             await ctx.reply(
                 f"You only have **{e.have:,}** cash — need **{e.need:,}**.",
                 ephemeral=True,
@@ -142,10 +142,10 @@ class ShopCog(commands.Cog):
                 payout, new_balance, new_qty = await sell_item(
                     session, ctx.author.id, item, qty
                 )
-        except UnknownItem:
+        except UnknownItemError:
             await ctx.reply(f"No item with key `{item}`.", ephemeral=True)
             return
-        except InsufficientItems as e:
+        except InsufficientItemsError as e:
             await ctx.reply(
                 f"You only have **{e.have}**x `{e.item_key}` — can't sell **{e.need}**.",
                 ephemeral=True,

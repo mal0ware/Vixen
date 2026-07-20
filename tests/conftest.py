@@ -133,10 +133,10 @@ async def db_session(_test_db_url: str) -> AsyncIterator[AsyncSession]:
     # release. For tests, the latency is irrelevant and it eliminates an
     # entire class of "connection from previous test still in flight" bugs.
     engine = create_async_engine(_test_db_url, poolclass=NullPool)
-    SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     try:
-        async with SessionLocal() as session:
+        async with session_factory() as session:
             try:
                 yield session
             finally:

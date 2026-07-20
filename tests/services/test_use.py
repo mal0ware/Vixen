@@ -12,8 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vixen.models import InventoryItem
-from vixen.services.shop import InsufficientItems, UnknownItem, add_item
-from vixen.services.use import NotConsumable, consume_item
+from vixen.services.shop import InsufficientItemsError, UnknownItemError, add_item
+from vixen.services.use import NotConsumableError, consume_item
 
 # ---------------------------------------------------------------- #
 # Happy path
@@ -65,7 +65,7 @@ async def test_consume_coffee_uses_caffeinate_handler(db_session: AsyncSession):
 
 
 async def test_consume_unknown_item_raises(db_session: AsyncSession):
-    with pytest.raises(UnknownItem):
+    with pytest.raises(UnknownItemError):
         await consume_item(db_session, 42, "fnord")
 
 
@@ -78,7 +78,7 @@ async def test_consume_non_consumable_raises_before_inventory_check(
     when the real reason is that fishing_rods aren't /use-able.
     """
     await add_item(db_session, 42, "fishing_rod", 1)
-    with pytest.raises(NotConsumable):
+    with pytest.raises(NotConsumableError):
         await consume_item(db_session, 42, "fishing_rod")
 
     # Inventory unchanged — we did NOT decrement.
@@ -93,8 +93,8 @@ async def test_consume_non_consumable_raises_before_inventory_check(
 
 
 async def test_consume_without_owning_raises_insufficient(db_session: AsyncSession):
-    """/use bread without owning any raises InsufficientItems with item_key set."""
-    with pytest.raises(InsufficientItems) as exc:
+    """/use bread without owning any raises InsufficientItemsError with item_key set."""
+    with pytest.raises(InsufficientItemsError) as exc:
         await consume_item(db_session, 42, "bread")
     assert exc.value.item_key == "bread"
     assert exc.value.have == 0

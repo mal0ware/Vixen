@@ -19,7 +19,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-
 # Maps a cog *class name* to a (display_label, sort_order) tuple. Lower
 # sort_order appears first in the overview embed. Adjust labels here to
 # rename categories without touching the cogs themselves.

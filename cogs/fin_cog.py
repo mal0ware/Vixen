@@ -24,6 +24,7 @@ matplotlib.use("Agg")
 import io
 
 import discord
+import pandas as pd
 from discord import app_commands
 from discord.ext import commands
 
@@ -432,7 +433,7 @@ class FinCog(commands.Cog):
 
         # Filter out tickers that errored or returned empty data; tell the
         # user which ones we dropped so they can fix typos.
-        series_by_ticker: dict[str, pd.Series] = {}  # type: ignore[name-defined]
+        series_by_ticker: dict[str, pd.Series] = {}
         dropped: list[str] = []
         for t, df_or_exc in zip(ticker_list, downloads, strict=False):
             if isinstance(df_or_exc, BaseException) or df_or_exc.empty:

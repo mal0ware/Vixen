@@ -19,7 +19,7 @@ from discord.ui import Button, View
 
 from vixen.db import get_session
 from vixen.services.cooldown import try_acquire
-from vixen.services.economy import InsufficientFunds, change_cash
+from vixen.services.economy import InsufficientFundsError, change_cash
 
 # Internal mapping for clarity. Kept symmetric so the win-table is easy
 # to read: rock beats scissors, paper beats rock, scissors beats paper.
@@ -126,7 +126,7 @@ class _PickButton(Button):
                     new_balance = await change_cash(
                         session, view.owner_id, delta, reason=reason
                     )
-            except InsufficientFunds as e:
+            except InsufficientFundsError as e:
                 # Edge case: user spent their cash between starting the
                 # round and clicking. Reject the round result by undoing
                 # the lock — they can /rps again with a smaller stake.

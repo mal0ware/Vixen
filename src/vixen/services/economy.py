@@ -17,7 +17,7 @@ Design rules:
    Past balance state is reconstructible by summing deltas, which is
    useful for debugging and for `/balance-history` later.
 
-4. **Domain errors are typed.** Cogs catch `InsufficientFunds` and friends
+4. **Domain errors are typed.** Cogs catch `InsufficientFundsError` and friends
    and turn them into user-facing messages. Don't leak SQLAlchemy errors
    to the user.
 """
@@ -36,7 +36,7 @@ class EconomyError(Exception):
     """Base class for economy-layer errors."""
 
 
-class InsufficientFunds(EconomyError):
+class InsufficientFundsError(EconomyError):
     """User attempted to spend more cash than they have."""
 
     def __init__(self, *, have: int, need: int):
@@ -45,7 +45,7 @@ class InsufficientFunds(EconomyError):
         super().__init__(f"insufficient funds: have {have}, need {need}")
 
 
-class InvalidAmount(EconomyError):
+class InvalidAmountError(EconomyError):
     """Caller passed a non-positive or otherwise invalid amount."""
 
 
@@ -93,17 +93,17 @@ async def change_cash(
             Stored in `transactions.reason` for filtering.
 
     Raises:
-        InvalidAmount: delta is 0. Zero-delta calls are bugs (no-ops shouldn't
+        InvalidAmountError: delta is 0. Zero-delta calls are bugs (no-ops shouldn't
             create transaction rows).
-        InsufficientFunds: delta would push the user's cash below zero.
+        InsufficientFundsError: delta would push the user's cash below zero.
     """
     if delta == 0:
-        raise InvalidAmount("delta=0 is a bug — refusing to write a no-op transaction")
+        raise InvalidAmountError("delta=0 is a bug — refusing to write a no-op transaction")
 
     user = await get_or_create_user(session, discord_id)
     new_cash = user.cash + delta
     if new_cash < 0:
-        raise InsufficientFunds(have=user.cash, need=-delta)
+        raise InsufficientFundsError(have=user.cash, need=-delta)
 
     user.cash = new_cash
     session.add(

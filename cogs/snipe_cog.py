@@ -5,9 +5,9 @@ Pre-migration the cog read points from `bot.stats2` (loaded from
 the Postgres `snipe_scores` table — same display, no JSON file needed.
 
 The pagination view supports:
-    « / ‹       jump to first / previous page
+    << / <      jump to first / previous page
     [N/total]   page indicator (clickable: opens a "go to page" modal)
-    › / »       next / last page
+    > / >>      next / last page
 
 5 buttons per row, the discord.py max. Owner-locked: only the original
 invoker can flip pages, otherwise a stranger could repaginate someone

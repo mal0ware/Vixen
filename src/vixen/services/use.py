@@ -5,9 +5,9 @@ is flavor text the cog renders to the user.
 
 The flow is one atomic transaction (anchored at the cog's `get_session()`):
 
-    1. Validate the item exists in the catalog            (UnknownItem)
-    2. Validate it's actually consumable (has an effect)  (NotConsumable)
-    3. Decrement inventory by 1                           (InsufficientItems)
+    1. Validate the item exists in the catalog            (UnknownItemError)
+    2. Validate it's actually consumable (has an effect)  (NotConsumableError)
+    3. Decrement inventory by 1                           (InsufficientItemsError)
     4. Look up + run the effect handler                   (handler may raise)
     5. Return the flavor string
 
@@ -28,14 +28,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .economy import EconomyError
 from .effects import EFFECTS
 from .items import ITEMS
-from .shop import UnknownItem, remove_item
+from .shop import UnknownItemError, remove_item
 
 # --------------------------------------------------------------------------- #
 # Domain errors
 # --------------------------------------------------------------------------- #
 
 
-class NotConsumable(EconomyError):
+class NotConsumableError(EconomyError):
     """Item exists in the catalog but has `effect=None`.
 
     Raised when a user runs /use on a non-consumable like fishing_rod or
@@ -61,9 +61,9 @@ async def consume_item(
     """Consume one of `item_key` and run its effect. Returns flavor text.
 
     Raises:
-        UnknownItem: item_key not in catalog.
-        NotConsumable: item is in the catalog but has no effect handler.
-        InsufficientItems: user owns zero of the item (re-raised from
+        UnknownItemError: item_key not in catalog.
+        NotConsumableError: item is in the catalog but has no effect handler.
+        InsufficientItemsError: user owns zero of the item (re-raised from
             `shop.remove_item`).
 
     Order matters: we check catalog membership and consumability BEFORE
@@ -71,13 +71,13 @@ async def consume_item(
     burn the user's rod when we tell them so.
     """
     if item_key not in ITEMS:
-        raise UnknownItem(item_key)
+        raise UnknownItemError(item_key)
 
     item = ITEMS[item_key]
     if item.effect is None:
-        raise NotConsumable(item_key)
+        raise NotConsumableError(item_key)
 
-    # Inventory decrement. Raises InsufficientItems if the user owns zero.
+    # Inventory decrement. Raises InsufficientItemsError if the user owns zero.
     # Decrementing before running the effect is correct: real consumables
     # are spent on attempt, not on success. (A future "bread fails to chew
     # 5% of the time" mechanic can refund inside its handler if needed.)

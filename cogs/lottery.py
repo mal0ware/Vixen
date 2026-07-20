@@ -18,9 +18,9 @@ from discord.ext import commands
 
 from vixen.db import get_session
 from vixen.services.cooldown import try_acquire
-from vixen.services.economy import InvalidAmount
-from vixen.services.lottery import NoEntries, draw, enter, pool
-from vixen.services.shop import InsufficientItems
+from vixen.services.economy import InvalidAmountError
+from vixen.services.lottery import NoEntriesError, draw, enter, pool
+from vixen.services.shop import InsufficientItemsError
 
 
 class LotteryCog(commands.Cog):
@@ -64,12 +64,12 @@ class LotteryCog(commands.Cog):
         try:
             async with get_session() as session:
                 new_total = await enter(session, interaction.user.id, count)
-        except InvalidAmount:
+        except InvalidAmountError:
             await interaction.response.send_message(
                 "Count must be positive.", ephemeral=True
             )
             return
-        except InsufficientItems as e:
+        except InsufficientItemsError as e:
             await interaction.response.send_message(
                 f"You only have **{e.have}** lottery_tickets — can't stake **{e.need}**.",
                 ephemeral=True,
@@ -128,7 +128,7 @@ class LotteryCog(commands.Cog):
         try:
             async with get_session() as session:
                 winner_id, pot_won, entries = await draw(session)
-        except NoEntries:
+        except NoEntriesError:
             await interaction.response.send_message(
                 "Nobody's entered the lottery yet — nothing to draw."
             )

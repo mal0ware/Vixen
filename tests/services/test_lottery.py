@@ -9,10 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vixen.models import LotteryEntry, User
-from vixen.services.economy import InvalidAmount
+from vixen.services.economy import InvalidAmountError
 from vixen.services.items import ITEMS
-from vixen.services.lottery import NoEntries, draw, enter, pool
-from vixen.services.shop import InsufficientItems, add_item
+from vixen.services.lottery import NoEntriesError, draw, enter, pool
+from vixen.services.shop import InsufficientItemsError, add_item
 
 _TICKET_PRICE = ITEMS["lottery_ticket"].price
 
@@ -47,8 +47,8 @@ async def test_enter_accumulates_for_same_user(db_session: AsyncSession):
 
 
 async def test_enter_without_tickets_raises(db_session: AsyncSession):
-    """No lottery_tickets in inventory → InsufficientItems, no row written."""
-    with pytest.raises(InsufficientItems):
+    """No lottery_tickets in inventory → InsufficientItemsError, no row written."""
+    with pytest.raises(InsufficientItemsError):
         await enter(db_session, 42, 1)
 
     rows = (await db_session.execute(select(LotteryEntry))).scalars().all()
@@ -56,9 +56,9 @@ async def test_enter_without_tickets_raises(db_session: AsyncSession):
 
 
 async def test_enter_zero_or_negative_raises(db_session: AsyncSession):
-    with pytest.raises(InvalidAmount):
+    with pytest.raises(InvalidAmountError):
         await enter(db_session, 42, 0)
-    with pytest.raises(InvalidAmount):
+    with pytest.raises(InvalidAmountError):
         await enter(db_session, 42, -1)
 
 
@@ -150,5 +150,5 @@ async def test_draw_weighted_by_entries(db_session: AsyncSession):
 
 
 async def test_draw_with_no_entries_raises(db_session: AsyncSession):
-    with pytest.raises(NoEntries):
+    with pytest.raises(NoEntriesError):
         await draw(db_session)
